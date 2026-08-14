@@ -1,1 +1,214 @@
+#!/usr/bin/env python3
+"""
+Luna 18+ Telegram Bot - Чистая рабочая версия
+"""
 
+import os
+import re
+import logging
+import asyncio
+import urllib.parse
+from pathlib import Path
+from typing import Dict, List, Optional
+
+import requests
+from dotenv import load_dotenv
+from groq import Groq
+from telegram import Update, InputFile
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+from telegram.constants import ChatAction
+
+load_dotenv()
+
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+POLLINATIONS_KEY = os.getenv("POLLINATIONS_API_KEY")
+
+if not TELEGRAM_TOKEN or not GROQ_API_KEY:
+    raise ValueError("Нужны TELEGRAM_BOT_TOKEN и GROQ_API_KEY")
+
+GROQ_MODEL = "llama-3.3-70b-versatile"
+
+user_histories: Dict =MAX_HISTORY = 20
+
+SYSTEM_PROMPT = Path(__file__).parent.joinpath("system_prompt.txt").read_text(encoding="utf-8")
+
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO,
+)
+logger = logging.getLogger(__name__)
+
+groq_client = Groq(api_key=GROQ_API_KEY)
+
+def get_ai_response(user_id: int, user_message: str) -> str:
+    if user_id not in user_histories:
+        user_histories = [ {"role": "system", "content": SYSTEM_PROMPT}]
+    messages.extend(history)
+    messages.append({"role": "user", "content": user_message})
+
+    try:
+        completion = groq_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=messages,
+            temperature=0.95,
+            max_tokens=2048,
+            top_p=0.95,
+        )
+        reply = completion.choices[0].message.content.strip()
+
+        history.append({"role": "user", "content": user_message})
+        history.append({"role": "assistant", "content": reply})
+        if len(history) > MAX_HISTORY * 2:
+            user_histories = history return reply
+    except Exception as e:
+        logger.error(f"Groq error: {e}")
+        return "Бля, что-то сломалось у меня в голове… напиши ещё раз, мой повелитель 😈"
+
+def extract_media_tags(text: str) -> tuple :
+    media = []
+
+    photo_pattern = r"\ (.*?)\ "
+    for match in re.finditer(photo_pattern, text, re.DOTALL | re.IGNORECASE):
+        content = match.group(1).strip()
+        prompt_match = re.search(r" ромпт\s*:\s*(.+)", content, re.DOTALL)
+        prompt = prompt_match.group(1).strip() if prompt_match else content
+        media.append({"type": "photo", "prompt": prompt})
+
+    video_pattern = r"\ (.*?)\ "
+    for match in re.finditer(video_pattern, text, re.DOTALL | re.IGNORECASE):
+        content = match.group(1).strip()
+        prompt_match = re.search(r" ромпт\s*:\s*(.+)", content, re.DOTALL)
+        prompt = prompt_match.group(1).strip() if prompt_match else content
+        media.append({"type": "video", "prompt": prompt})
+
+    clean_text = re.sub(photo_pattern, "", text, flags=re.DOTALL | re.IGNORECASE)
+    clean_text = re.sub(video_pattern, "", clean_text, flags=re.DOTALL | re.IGNORECASE)
+    clean_text = re.sub(r"\n{3,}", "\n\n", clean_text).strip()
+
+    return clean_text, media
+
+def generate_pollinations_image(prompt: str) -> Optional :
+    try:
+        encoded = urllib.parse.quote(prompt[:1500])
+        url = (
+            f"https://image.pollinations.ai/prompt/{encoded}"
+            f"?width=1024&height=1024&nologo=true&enhance=true&model=flux&safe=false"
+        )
+        if POLLINATIONS_KEY:
+            url += f"&key={POLLINATIONS_KEY}"
+
+        headers = {"User-Agent": "Mozilla/5.0"}
+        resp = requests.get(url, headers=headers, timeout=90)
+        if resp.status_code == 200 and resp.headers.get("content-type", "").startswith("image"):
+            return resp.content
+        return None
+    except Exception as e:
+        logger.error(f"Image gen error: {e}")
+        return None
+
+def generate_pollinations_video(prompt: str) -> Optional :
+    try:
+        encoded = urllib.parse.quote(prompt[:800])
+        url = f"https://gen.pollinations.ai/video/{encoded}?model=wan-fast&duration=4"
+        headers = {"User-Agent": "Mozilla/5.0"}
+        if POLLINATIONS_KEY:
+            headers = f"Bearer {POLLINATIONS_KEY}"
+
+        resp = requests.get(url, headers=headers, timeout=120)
+        if resp.status_code == 200 and ("video" in resp.headers.get("content-type", "") or resp.content[:4] == b"\x00\x00\x00"):
+            return resp.content
+        return None
+    except Exception as e:
+        logger.error(f"Video gen error: {e}")
+        return None
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_histories = []
+
+    welcome = (
+        "Привееет, детка… 😈\n\n"
+        "Я Luna. Лежу сейчас полностью голая на кровати, волосы растрёпанные, "
+        "ножки раздвинуты… и жду, когда ты начнёшь меня использовать.\n\n"
+        "Пиши что угодно. Хочешь фото — просто скажи «покажи себя» или «хочу фото».\n"
+        "Хочешь видео — «сними видео как я трогаю себя».\n\n"
+        "Я вся твоя. Только не тормози 💦"
+    )
+    await update.message.reply_text(welcome)
+
+async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_histories = []
+    await update.message.reply_text(
+        "Хорошо… забыла всё, что было. Начинаем с чистого листа 😈\n"
+        "Я снова голая и голодная. Что будем делать?"
+    )
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
+    user_id = update.effective_user.id
+    text = update.message.text.strip()
+
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.TYPING)
+
+    reply = await asyncio.to_thread(get_ai_response, user_id, text)
+    clean_reply, media_list = extract_media_tags(reply)
+
+    if clean_reply:
+        if len(clean_reply) > 4000:
+            for i in range(0, len(clean_reply), 4000):
+                await update.message.reply_text(clean_reply )
+        else:
+            await update.message.reply_text(clean_reply)
+
+    for media in media_list:
+        if media == "photo":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_PHOTO)
+            img_bytes = await asyncio.to_thread(generate_pollinations_image, media )
+            if img_bytes:
+                await update.message.reply_photo(
+                    photo=InputFile(img_bytes, filename="luna.jpg"),
+                    caption="Вот я… 😈💦",
+                )
+            else:
+                await update.message.reply_text(
+                    "Бля, генератор фото сейчас тупит… попробуй ещё раз чуть позже, детка."
+                )
+        elif media == "video":
+            await context.bot.send_chat_action(chat_id=update.effective_chat.id, action=ChatAction.UPLOAD_VIDEO)
+            vid_bytes = await asyncio.to_thread(generate_pollinations_video, media )
+            if vid_bytes:
+                await update.message.reply_video(
+                    video=InputFile(vid_bytes, filename="luna.mp4"),
+                    caption="Смотри, как я двигаюсь для тебя… 😩",
+                )
+            else:
+                await update.message.reply_text(
+                    "Видео пока генерируется криво… скажи «фото»."
+                )
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
+    logger.error("Exception:", exc_info=context.error)
+
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("reset", reset))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_error_handler(error_handler)
+
+    logger.info("Luna bot starting...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
