@@ -1,116 +1,141 @@
 import os
 import logging
 import asyncio
-import re
 import random
-from urllib.parse import quote
-from aiohttp import web
-from telegram import Update
-from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-from groq import AsyncGroq
+from openai import AsyncOpenAI
 
-# Настройка логирования
-logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
+# ---------- НАСТРОЙКА ЛОГГЕРА ----------
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("LunaEngine")
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-PORT = int(os.environ.get("PORT", 10000))
+# ---------- ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ ----------
+# max_retries=0 отключает внутренние повторы SDK, давая контроль циклу
+groq_client = AsyncOpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=os.getenv("GROQ_API_KEY"),
+    timeout=15.0,
+    max_retries=0
+)
 
-client = AsyncGroq(api_key=GROQ_API_KEY)
+mistral_client = AsyncOpenAI(
+    base_url="https://api.mistral.ai/v1",
+    api_key=os.getenv("MISTRAL_API_KEY"),
+    timeout=15.0,
+    max_retries=0
+)
 
-# Чтение системного промпта
-try:
-    with open("system_prompt.txt", "r", encoding="utf-8") as f:
-        SYSTEM_PROMPT = f.read()
-except Exception:
-    SYSTEM_PROMPT = "Ты — Луна, 23-летняя девушка. Дерзкая и сексуальная."
+openrouter_client = AsyncOpenAI(
+    base_url="https://openrouter.ai/api/v1",
+    api_key=os.getenv("OPENROUTER_API_KEY"),
+    timeout=15.0,
+    max_retries=0
+)
 
-# Инструкция для нейросети генерировать фото-тег
-PHOTO_INSTRUCTION = "\n\nЕсли ты отправляешь или обещаешь фото, обязательно добавь в конец ответа тег: [PHOTO: detailed english description for image generation]."
+# ---------- КОНФИГУРАЦИЯ МОДЕЛЕЙ ----------
+MODEL_CHAIN = [
+    {
+        "name": "Groq 70B",
+        "client": groq_client,
+        "model": "llama-3.3-70b-versatile",
+        "max_tokens": 800,
+        "temperature": 0.85
+    },
+    {
+        "name": "Groq 8B",
+        "client": groq_client,
+        "model": "llama-3.1-8b-instant",
+        "max_tokens": 600,
+        "temperature": 0.9
+    },
+    {
+        "name": "Mistral",
+        "client": mistral_client,
+        "model": "mistral-small-latest",
+        "max_tokens": 700,
+        "temperature": 0.9
+    },
+    {
+        "name": "OpenRouter Free",
+        "client": openrouter_client,
+        "model": "openrouter/free",
+        "max_tokens": 600,
+        "temperature": 0.85
+    }
+]
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        user_text = update.message.text
-        if not user_text:
-            return
-        
-        chat_completion = await client.chat.completions.create(
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT + PHOTO_INSTRUCTION},
-                {"role": "user", "content": user_text}
-            ],
-            model="llama-3.3-70b-versatile",
-            temperature=0.8,
-            max_tokens=800
-        )
-        
-        response = chat_completion.choices[0].message.content
-        
-        # Перехват промптов и тегов фото
-        photo_match = re.search(r'\[PHOTO:\s*(.*?)\]', response, re.DOTALL | re.IGNORECASE)
-        
-        if not photo_match:
-            # Если нейросеть просто выкинула текст промпта без тега
-            alt_match = re.search(r'(realistic,.*?(?:masterpiece|nsfw|detailed|ass|breasts))', response, re.DOTALL | re.IGNORECASE)
-            if alt_match:
-                prompt_text = alt_match.group(1)
-                clean_text = response.replace(prompt_text, '').strip()
-            else:
-                prompt_text = None
-                clean_text = response
-        else:
-            prompt_text = photo_match.group(1).strip()
-            clean_text = re.sub(r'\[PHOTO:\s*.*?\]', '', response, flags=re.DOTALL | re.IGNORECASE).strip()
+# ---------- ФУНКЦИЯ ПРОВЕРКИ ОШИБОК ----------
+def is_retryable_error(exception: Exception) -> bool:
+    """Проверяем, стоит ли повторять запрос при сетевых сбоях и лимитах."""
+    error_str = str(exception).lower()
+    retryable = [
+        "429", "rate limit", "too many requests",
+        "500", "502", "503", "504", "timeout",
+        "connection", "network", "unavailable"
+    ]
+    return any(keyword in error_str for keyword in retryable)
 
-        # Отправка текста
-        if clean_text:
-            await update.message.reply_text(clean_text)
-        
-        # Генерация и отправка снимка через Pollinations AI
-        if prompt_text:
-            seed = random.randint(1, 999999)
-            encoded_prompt = quote(prompt_text)
-            image_url = f"https://image.pollinations.ai/prompt/{encoded_prompt}?width=800&height=1000&nologo=true&seed={seed}"
-            
-            await context.bot.send_photo(
-                chat_id=update.effective_chat.id,
-                photo=image_url
-            )
-            
-    except Exception as e:
-        logging.error(f"Ошибка при обработке сообщения: {e}")
-        await update.message.reply_text("Бля, что-то пошло не так в голове... Попробуй ещё раз 🥺")
+# ---------- ОСНОВНАЯ ФУНКЦИЯ ГЕНЕРАЦИИ ----------
+async def generate_luna_reply(messages: list) -> str:
+    """Каскадная генерация с переключением моделей и обработкой ошибок."""
+    last_error = None
 
-async def handle_ping(request):
-    return web.Response(text="Luna is alive!")
+    for provider in MODEL_CHAIN:
+        for attempt in range(2):  # 2 быстрых попытки на модель для ускорения
+            try:
+                logger.info(f"Запрос → {provider['name']} (попытка {attempt+1}/2)")
 
-async def web_server():
-    app = web.Application()
-    app.router.add_get("/", handle_ping)
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", PORT)
-    await site.start()
-    logging.info(f"Веб-сервер запущен на порту {PORT}")
+                response = await provider["client"].chat.completions.create(
+                    model=provider["model"],
+                    messages=messages,
+                    max_tokens=provider["max_tokens"],
+                    temperature=provider["temperature"],
+                    top_p=0.95
+                )
 
-async def main():
-    await web_server()
+                content = response.choices[0].message.content
 
-    application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-    
-    echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
-    application.add_handler(echo_handler)
-    
-    await application.bot.delete_webhook(drop_pending_updates=True)
+                # Проверка на пустой ответ
+                if not content or len(content.strip()) < 5:
+                    logger.warning(f"Пустой ответ от {provider['name']}, переключаем модель")
+                    break
 
-    print("Луна проснулась...")
-    
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-    
-    stop_signal = asyncio.Event()
-    await stop_signal.wait()
+                logger.info(f"✅ Успех: {provider['name']} ({len(content)} символов)")
+                return content.strip()
 
-if __name__ == '__main__':
-    asyncio.run(main())
+            except Exception as e:
+                logger.warning(f"❌ Ошибка {provider['name']} ({attempt+1}): {str(e)[:120]}")
+                last_error = e
+
+                if not is_retryable_error(e):
+                    break
+
+                if attempt < 1:
+                    await asyncio.sleep(1.0)
+
+        logger.warning(f"Провайдер {provider['name']} пропущен, пробуем следующий...")
+
+    # ---------- ФИНАЛЬНЫЙ FAILSAFE ----------
+    logger.error(f"Все провайдеры недоступны. Последняя ошибка: {last_error}")
+
+    fallback_messages = [
+        "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
+        "Кажется, серверы перегрелись от нашей страсти... Дай минутку остыть и напиши снова. 💋",
+        "Я бы хотела ответить тебе прямо сейчас, но что-то затормозило... Попробуй ещё раз! 😈"
+    ]
+    return random.choice(fallback_messages)
+
+# ---------- ТЕСТОВЫЙ ЗАПУСК ----------
+if __name__ == "__main__":
+    test_messages = [
+        {"role": "system", "content": "Ты — Луна, дерзкая и горячая девушка."},
+        {"role": "user", "content": "Привет, Луна!"}
+    ]
+
+    async def test():
+        reply = await generate_luna_reply(test_messages)
+        print(f"\nОтвет Луны:\n{reply}")
+
+    asyncio.run(test())
