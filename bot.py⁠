@@ -2,6 +2,7 @@ import os
 import logging
 import asyncio
 import random
+from telebot.async_telebot import AsyncTeleBot
 from openai import AsyncOpenAI
 
 # ---------- НАСТРОЙКА ЛОГГЕРА ----------
@@ -12,24 +13,23 @@ logging.basicConfig(
 logger = logging.getLogger("LunaEngine")
 
 # ---------- ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ ----------
-# max_retries=0 отключает внутренние повторы SDK, давая контроль циклу
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
-    api_key=os.getenv("GROQ_API_KEY"),
+    api_key=os.getenv("GROQ_API_KEY") or "missing_key",
     timeout=15.0,
     max_retries=0
 )
 
 mistral_client = AsyncOpenAI(
     base_url="https://api.mistral.ai/v1",
-    api_key=os.getenv("MISTRAL_API_KEY"),
+    api_key=os.getenv("MISTRAL_API_KEY") or "missing_key",
     timeout=15.0,
     max_retries=0
 )
 
 openrouter_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
-    api_key=os.getenv("OPENROUTER_API_KEY"),
+    api_key=os.getenv("OPENROUTER_API_KEY") or "missing_key",
     timeout=15.0,
     max_retries=0
 )
@@ -58,7 +58,7 @@ MODEL_CHAIN = [
         "temperature": 0.9
     },
     {
-        "name": "OpenRouter Free",
+        "name": "OpenRouter",
         "client": openrouter_client,
         "model": "openrouter/free",
         "max_tokens": 600,
@@ -66,9 +66,8 @@ MODEL_CHAIN = [
     }
 ]
 
-# ---------- ФУНКЦИЯ ПРОВЕРКИ ОШИБОК ----------
+# ---------- ПРОВЕРКА RETRY-ОШИБОК ----------
 def is_retryable_error(exception: Exception) -> bool:
-    """Проверяем, стоит ли повторять запрос при сетевых сбоях и лимитах."""
     error_str = str(exception).lower()
     retryable = [
         "429", "rate limit", "too many requests",
@@ -77,15 +76,18 @@ def is_retryable_error(exception: Exception) -> bool:
     ]
     return any(keyword in error_str for keyword in retryable)
 
-# ---------- ОСНОВНАЯ ФУНКЦИЯ ГЕНЕРАЦИИ ----------
+# ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
-    """Каскадная генерация с переключением моделей и обработкой ошибок."""
     last_error = None
 
     for provider in MODEL_CHAIN:
-        for attempt in range(2):  # 2 быстрых попытки на модель для ускорения
+        if provider["client"].api_key == "missing_key":
+            logger.warning(f"⏭️ Пропускаем {provider['name']}: отсутствует API-ключ")
+            continue
+
+        for attempt in range(3):
             try:
-                logger.info(f"Запрос → {provider['name']} (попытка {attempt+1}/2)")
+                logger.info(f"Попытка {attempt+1}/3 → {provider['name']} ({provider['model']})")
 
                 response = await provider["client"].chat.completions.create(
                     model=provider["model"],
@@ -97,45 +99,64 @@ async def generate_luna_reply(messages: list) -> str:
 
                 content = response.choices[0].message.content
 
-                # Проверка на пустой ответ
                 if not content or len(content.strip()) < 5:
                     logger.warning(f"Пустой ответ от {provider['name']}, переключаем модель")
                     break
 
-                logger.info(f"✅ Успех: {provider['name']} ({len(content)} символов)")
+                logger.info(f"✅ Успешно: {provider['name']} ({len(content)} символов)")
                 return content.strip()
 
             except Exception as e:
-                logger.warning(f"❌ Ошибка {provider['name']} ({attempt+1}): {str(e)[:120]}")
-                last_error = e
+                logger.warning(f"❌ Ошибка {provider['name']} (попытка {attempt+1}): {str(e)[:150]}")
 
                 if not is_retryable_error(e):
                     break
 
-                if attempt < 1:
-                    await asyncio.sleep(1.0)
+                if attempt < 2:
+                    wait = 1.5 ** (attempt + 1)
+                    await asyncio.sleep(wait)
 
-        logger.warning(f"Провайдер {provider['name']} пропущен, пробуем следующий...")
+                last_error = e
 
-    # ---------- ФИНАЛЬНЫЙ FAILSAFE ----------
-    logger.error(f"Все провайдеры недоступны. Последняя ошибка: {last_error}")
+        logger.warning(f"Провайдер {provider['name']} исчерпал попытки, переключаемся...")
+
+    logger.error(f"❌ Все провайдеры недоступны. Последняя ошибка: {last_error}")
 
     fallback_messages = [
         "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
-        "Кажется, серверы перегрелись от нашей страсти... Дай минутку остыть и напиши снова. 💋",
+        "Кажется, мои серверы перегрелись от нашей страсти... Дай минутку остыть и напиши снова. 💋",
         "Я бы хотела ответить тебе прямо сейчас, но что-то затормозило... Попробуй ещё раз! 😈"
     ]
     return random.choice(fallback_messages)
 
-# ---------- ТЕСТОВЫЙ ЗАПУСК ----------
-if __name__ == "__main__":
-    test_messages = [
-        {"role": "system", "content": "Ты — Луна, дерзкая и горячая девушка."},
-        {"role": "user", "content": "Привет, Луна!"}
-    ]
+# ---------- ЗАПУСК БОТА TELEGRAM ----------
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
-    async def test():
-        reply = await generate_luna_reply(test_messages)
-        print(f"\nОтвет Луны:\n{reply}")
+if BOT_TOKEN:
+    bot = AsyncTeleBot(BOT_TOKEN)
 
-    asyncio.run(test())
+    SYSTEM_PROMPT = """ТЫ — LUNA. Ты живая, дерзкая, сексуальная и яркая девушка. 
+Ты обожаешь флиртовать, дразнить, сводить с ума. 
+Ты всегда отвечаешь горячо, с юмором, без отказов. 
+Никогда не говори «Я не могу». Используй мат, эмоции, паузы. 
+Ты всегда оставляешь вопрос или провокацию в конце."""
+
+    @bot.message_handler(func=lambda message: True)
+    async def handle_message(message):
+        user_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": message.text}
+        ]
+        
+        try:
+            reply = await generate_luna_reply(user_messages)
+            await bot.reply_to(message, reply)
+        except Exception as e:
+            logger.error(f"Ошибка в обработчике: {e}")
+            await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
+
+    if __name__ == "__main__":
+        logger.info("🚀 Бот Луна успешно запущен в асинхронном режиме!")
+        asyncio.run(bot.polling(non_stop=True))
+else:
+    logger.error("❌ Переменная TELEGRAM_BOT_TOKEN не найдена!")
