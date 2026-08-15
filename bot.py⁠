@@ -1,5 +1,6 @@
 import os
 import logging
+import asyncio
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from groq import AsyncGroq
@@ -41,11 +42,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Ошибка при обработке сообщения: {e}")
         await update.message.reply_text("Бля, что-то пошло не так в голове... Попробуй ещё раз 🥺")
 
-if __name__ == '__main__':
+async def main():
     application = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     
     echo_handler = MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message)
     application.add_handler(echo_handler)
     
     print("Луна проснулась...")
-    application.run_polling()
+    
+    # Запуск бота для версии 21+
+    await application.initialize()
+    await application.start()
+    await application.updater.start_polling()
+    
+    # Держим бота запущенным
+    stop_signal = asyncio.Event()
+    await stop_signal.wait()
+
+if __name__ == '__main__':
+    asyncio.run(main())
