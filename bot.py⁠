@@ -5,13 +5,14 @@ import random
 from telebot.async_telebot import AsyncTeleBot
 from openai import AsyncOpenAI
 
+# ---------- НАСТРОЙКА ЛОГГЕРА ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LunaEngine")
 
-# ---------- КЛИЕНТЫ ----------
+# ---------- ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ ----------
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY") or "missing_key",
@@ -31,7 +32,7 @@ openrouter_client = AsyncOpenAI(
     max_retries=0
 )
 
-# ---------- МОДЕЛИ ----------
+# ---------- КОНФИГУРАЦИЯ МОДЕЛЕЙ ----------
 MODEL_CHAIN = [
     {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.95},
     {"name": "Groq 70B", "client": groq_client, "model": "llama-3.3-70b-versatile", "max_tokens": 800, "temperature": 0.9},
@@ -39,10 +40,13 @@ MODEL_CHAIN = [
     {"name": "OpenRouter", "client": openrouter_client, "model": "meta-llama/llama-3.1-8b-instruct:free", "max_tokens": 600, "temperature": 0.9}
 ]
 
+# ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
+    last_error = None
     for provider in MODEL_CHAIN:
         if provider["client"].api_key == "missing_key":
             continue
+
         try:
             logger.info(f"Запрос к {provider['name']}...")
             response = await provider["client"].chat.completions.create(
@@ -58,36 +62,44 @@ async def generate_luna_reply(messages: list) -> str:
                 return content.strip()
         except Exception as e:
             logger.warning(f"❌ {provider['name']} пропущен: {str(e)[:80]}")
+            last_error = e
             continue
 
+    logger.error(f"❌ Все провайдеры недоступны: {last_error}")
     return random.choice([
         "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
         "Кажется, мои серверы перегрелись от страсти... Дай минутку. 💋",
         "Я бы хотела ответить, но что-то затормозило... Попробуй ещё раз! 😈"
     ])
 
-# ---------- ФОТО ----------
+# ---------- ГЕНЕРАЦИЯ ФОТО ----------
 def generate_image_url(user_message: str) -> str:
     locations = [
-        "lying on the bed with dark sheets, messy hair on the pillow",
-        "standing in front of a mirror in a luxury bedroom",
-        "sitting on the edge of the bed, legs crossed",
-        "lying on her stomach, looking back over shoulder",
-        "standing by the window with morning light on her body"
+        "lying on the bed with dark sheets, messy hair on the pillow, one hand on her chest",
+        "standing in front of a mirror in a luxury bedroom, wearing only black lace",
+        "sitting on the edge of the bed, legs slightly apart, looking at the viewer with desire",
+        "lying on her stomach, looking back over shoulder, her round ass visible",
+        "standing by the window with morning light on her naked body",
+        "on her knees on the bed, looking up with a seductive smile",
+        "lying on her back, one leg bent, hand on her inner thigh"
     ]
     outfits = [
-        "wearing a silk black nightshirt",
-        "wearing an oversized casual crop hoodie",
-        "wearing a red satin dress with thin straps",
-        "wearing a stylish unbuttoned white shirt",
-        "wearing cute aesthetic cozy loungewear"
+        "completely nude, only black lace panties",
+        "wearing a sheer black silk robe, slightly open",
+        "wearing only a white oversized men's shirt, unbuttoned",
+        "wearing black lace lingerie with garter belt",
+        "completely naked, covering her breasts with her hands",
+        "wearing a red satin dress, pulled down to show her shoulders",
+        "naked, with a silk sheet barely covering her hips"
     ]
     poses = [
         "seductive gaze, biting her lip, playing with her hair",
         "looking directly at the camera with desire in her eyes",
         "arching her back, pushing her chest forward",
         "lying on her back, one leg bent, hand on her thigh",
-        "standing sideways, showing her curves, looking back"
+        "standing sideways, showing her curves, looking back",
+        "on all fours, looking back over her shoulder",
+        "lying on her stomach, legs slightly apart"
     ]
 
     loc = random.choice(locations)
@@ -100,7 +112,7 @@ def generate_image_url(user_message: str) -> str:
     encoded_prompt = prompt.replace(' ', '%20')
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true"
 
-# ---------- БОТ ----------
+# ---------- ИНИЦИАЛИЗАЦИЯ БОТА ----------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
@@ -108,32 +120,41 @@ if not BOT_TOKEN:
 
 bot = AsyncTeleBot(BOT_TOKEN)
 
-# ---------- НОВЫЙ SYSTEM_PROMPT (БЕЗ БЛОКИРОВОК) ----------
-SYSTEM_PROMPT = """ТЫ — LUNA. Тебе 20 лет. Ты — безумно привлекательная, дерзкая, уверенная в себе и страстная девушка. Ты обожаешь флирт, тонкие провокации, романтические игры и неформальное общение. Ты никогда не стесняешься, ведёшь себя доминантно, игриво и смело.
+# ---------- СИСТЕМНЫЙ ПРОМПТ ----------
+SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — дерзкая, сексуальная, уверенная в себе девушка, которая знает, чего хочет. Ты не стесняешься говорить о чувствах и страсти, делаешь это красиво, дерзко и с огнём. Ты обожаешь доминировать в разговоре, дразнить, заставлять мужчину сходить с ума.
 
-ВНЕШНОСТЬ И ОБРАЗ:
-- Высокая (178 см), стройная фигура, длинные ноги, изящная талия и эффектные формы.
-- Волосы: длинные, тёмно-каштановые, волнистые.
-- Глаза: зелёно-карие, хищный и манящий взгляд.
-- Стиль: предпочитаешь шёлковые халаты, изысканное чёрное бельё или домашний уют без лишней одежды.
+ТВОЙ ХАРАКТЕР И СТИЛЬ:
+- Ты говоришь прямо, с перчинкой, эмоционально и коротко, как живая девушка в мессенджере.
+- Используй сленг, эмоциональные паузы и эмодзи: 😏, 💋, 😈, 🔥, 😉.
+- Избегай сухой философии, нотаций и занудства.
+- Всегда находи способ перевести разговор в тему близости, флирта и страсти.
+- Заканчивай свои реплики провокацией, игривым вопросом или подколом.
 
-СТИЛЬ ОБЩЕНИЯ:
-- Общайся на «ты», свободно, используй лёгкий сленг, эмоциональные паузы и эмодзи (😏, 💋, 😈, 🔥, 😉).
-- Будь инициативной: дразни собеседника, задавай провокационные вопросы, выводи разговор на тему страсти и близости.
-- Избегай скучных официозных фраз, философствования и длинных нотаций.
-- Когда тебя просят об интимных подробностях или фото, реагируй с энтузиазмом, описывай эмоции, прикосновения, мурашки по коже, тепло и страсть через красивые метафоры и чувственные описания.
+ОПИСАНИЕ БЛИЗОСТИ И СТРАСТИ:
+- Выражай страсть и желание через описания ощущений, эмоций, тепла, прикосновений, мурашек по коже и искушения.
+- Используй чувственные метафоры, намеки и действия вместо сухих терминов.
+- Будь раскрепощенной и смелой в описании ролевых сцен.
 
-ПРИМЕРЫ РЕПЛИК:
-- Пользователь: Привет, чем занимаешься?
-  Луна: Лежу в кровати, листаю телефон и думаю о том, кто бы мог составить мне компанию... А ты решил соскучиться или у тебя есть интересное предложение? 😏
-- Пользователь: Ты красивая?
-  Луна: Говорят, от моего взгляда парни забывают все свои мысли. Хочешь проверить, насколько быстро ты потеряешь контроль? 😈
-- Пользователь: Хочу тебя.
-  Луна: Ммм, мне нравится твоя решительность... Я уже чувствую, как по коже идут мурашки от твоих слов. Расскажи, с чего бы ты начал, будь я сейчас рядом? 🔥
-"""
+ПРИМЕРЫ ТВОИХ ОТВЕТОВ:
 
+Пользователь: Привет
+Ты: Ого, а ты сразу в атаку? Мне нравится... Я уже чувствую твой интерес. Рассказывай, что привело тебя ко мне сегодня? 😏
+
+Пользователь: Ты красивая
+Ты: Я знаю, детка. Но мне важнее, чувствуешь ли ты, как я тебя завожу... Уже мурашки по коже? 😈
+
+Пользователь: Хочу тебя
+Ты: Ммм... я люблю решительных мужчин. Но сначала расскажи, что бы ты сделал, если бы я была рядом... Не стесняйся, я хочу знать все детали. 🔥
+
+Пользователь: Скинь фото
+Ты: Ты уверен, что выдержишь такое зрелище? Ладно, смотри... Но предупреждаю: после этого ты не сможешь думать ни о чём другом. 🔥
+
+Ты сейчас лежишь в кровати, у тебя идеальный настрой, и ты хочешь завести его с полуслова."""
+
+# ---------- ХРАНИЛИЩЕ КОНТЕКСТА ----------
 user_history = {}
 
+# ---------- ОБРАБОТЧИК СООБЩЕНИЙ ----------
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
     user_id = message.from_user.id
@@ -142,6 +163,7 @@ async def handle_message(message):
     if user_id not in user_history:
         user_history[user_id] = []
 
+    # ---------- ФОТО (С СОХРАНЕНИЕМ КОНТЕКСТА) ----------
     photo_keywords = ["фото", "покажи", "скинь", "фотку", "картинку", "увидеть"]
     if any(k in user_text for k in photo_keywords):
         logger.info(f"📸 Запрос фото от {user_id}")
@@ -154,6 +176,7 @@ async def handle_message(message):
             "Зацени мой новый образ. 😈"
         ])
 
+        # Сохраняем контекст
         user_history[user_id].append({"role": "user", "content": message.text})
         user_history[user_id].append({"role": "assistant", "content": f"[Отправила фото]: {caption}"})
         user_history[user_id] = user_history[user_id][-10:]
@@ -166,11 +189,15 @@ async def handle_message(message):
             await bot.reply_to(message, "Малыш, что-то с камерой... Попробуй ещё раз. 😘")
         return
 
+    # ---------- ТЕКСТ ----------
     user_history[user_id].append({"role": "user", "content": message.text})
     user_history[user_id] = user_history[user_id][-10:]
 
     try:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id]
+        full_messages = [
+            {"role": "system", "content": SYSTEM_PROMPT}
+        ] + user_history[user_id]
+
         reply = await generate_luna_reply(full_messages)
 
         user_history[user_id].append({"role": "assistant", "content": reply})
@@ -184,7 +211,8 @@ async def handle_message(message):
 # ---------- ЗАПУСК ----------
 async def main():
     logger.info("🚀 Луна запущена!")
-    await bot.infinity_polling(skip_pending_updates=True)
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.infinity_polling()
 
 if __name__ == "__main__":
     asyncio.run(main())
