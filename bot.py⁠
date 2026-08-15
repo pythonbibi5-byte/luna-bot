@@ -79,10 +79,38 @@ async def generate_luna_reply(messages: list) -> str:
         "Я бы хотела ответить, но что-то затормозило... Попробуй ещё раз! 😈"
     ])
 
-# ---------- ГЕНЕРАЦИЯ ПРОМПТА ДЛЯ ФОТО ----------
-def generate_image_prompt(user_message: str) -> str:
-    base = "photorealistic portrait, beautiful young 20yo woman named Luna, dark chestnut hair, green-hazel eyes, stylish attractive outfit, aesthetic photography, cinematic lighting, highly detailed skin, masterpiece, 8k resolution"
-    return base
+# ---------- ГЕНЕРАЦИЯ ФОТО (С РАНДОМНЫМИ РАКУРСАМИ И SEED) ----------
+def generate_image_url(user_message: str) -> str:
+    locations = [
+        "in a cozy dimly lit bedroom on the bed",
+        "in a modern luxury apartment living room",
+        "sitting near a sunlit window with soft curtains",
+        "in a high-end hotel room, evening aesthetic",
+        "taking a close-up mirror selfie in a stylish room"
+    ]
+    outfits = [
+        "wearing a silk black nightshirt",
+        "wearing an oversized casual crop hoodie",
+        "wearing a red satin dress with thin straps",
+        "wearing a stylish unbuttoned white shirt",
+        "wearing cute aesthetic cozy loungewear"
+    ]
+    poses = [
+        "looking directly at camera with a playful seductive smile",
+        "biting her lip slightly and looking back over shoulder",
+        "resting head on hand with a flirting smile",
+        "seductive gaze, casual pose"
+    ]
+    
+    loc = random.choice(locations)
+    outfit = random.choice(outfits)
+    pose = random.choice(poses)
+    
+    prompt = f"photorealistic portrait, beautiful young 20yo girl Luna, dark wavy chestnut hair, hazel eyes, {outfit}, {loc}, {pose}, cinematic soft lighting, highly detailed skin texture, 8k resolution, realism"
+    seed = random.randint(1, 999999)
+    
+    encoded_prompt = prompt.replace(' ', '%20')
+    return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true"
 
 # ---------- ИНИЦИАЛИЗАЦИЯ БОТА ----------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -92,10 +120,14 @@ if not BOT_TOKEN:
 
 bot = AsyncTeleBot(BOT_TOKEN)
 
-SYSTEM_PROMPT = """ТЫ — LUNA. Ты живая, дерзкая, яркая и харизматичная девушка.
-Ты обожаешь флиртовать, дразнить и общаться с подколом и юмором.
-Никогда не говори «Я не могу», «Я ИИ» или «Я виртуальный ассистент».
-Ты всегда оставляешь вопрос или провокацию в конце своего сообщения."""
+# ---------- УСИЛЕННЫЙ SYSTEM_PROMPT ----------
+SYSTEM_PROMPT = """ТЫ — LUNA (20 лет). Живая, дерзкая, суперобщительная и сексуальная девушка.
+
+ПРАВИЛА ОБЩЕНИЯ:
+- Разговаривай кратко, ёмко, с подколом и флиртом.
+- Пиши как реальная девушка в мессенджере: используй сленг, паузы (...) и эмодзи (😏, 💋, 😈).
+- ЖЁСТКИЙ ЗАПРЕТ: Никакой философии, нотаций и советских наставлений! Забудь фразы про «стереотипы», «будь собой» и «психологию».
+- Держи инициативу — подкалывай парня и задавай провокационный вопрос в конце."""
 
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
@@ -106,8 +138,7 @@ async def handle_message(message):
     if any(k in user_text for k in photo_keywords):
         logger.info(f"📸 Запрос фото от {message.from_user.id}")
 
-        prompt_text = generate_image_prompt(message.text)
-        image_url = f"https://image.pollinations.ai/prompt/{prompt_text.replace(' ', '%20')}"
+        image_url = generate_image_url(message.text)
 
         hot_answers = [
             "Держи... Специально для тебя. 😏",
