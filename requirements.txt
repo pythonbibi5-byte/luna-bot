@@ -1,4 +1,4 @@
-python-telegram-bot==21.1.1
-groq==0.4.2
-httpx==0.27.0
-aiohttp==3.9.3
+openai
+pyTelegramBotAPI
+python-dotenv
+requests
