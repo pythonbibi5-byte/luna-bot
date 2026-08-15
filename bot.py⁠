@@ -5,14 +5,13 @@ import random
 from telebot.async_telebot import AsyncTeleBot
 from openai import AsyncOpenAI
 
-# ---------- НАСТРОЙКА ЛОГГЕРА ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LunaEngine")
 
-# ---------- ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ ----------
+# ---------- КЛИЕНТЫ ----------
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY") or "missing_key",
@@ -32,21 +31,18 @@ openrouter_client = AsyncOpenAI(
     max_retries=0
 )
 
-# ---------- КОНФИГУРАЦИЯ МОДЕЛЕЙ (8B ПЕРВАЯ) ----------
+# ---------- МОДЕЛИ ----------
 MODEL_CHAIN = [
-    {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.9},
-    {"name": "Groq 70B", "client": groq_client, "model": "llama-3.3-70b-versatile", "max_tokens": 800, "temperature": 0.85},
-    {"name": "Mistral", "client": mistral_client, "model": "mistral-small-latest", "max_tokens": 700, "temperature": 0.9},
-    {"name": "OpenRouter", "client": openrouter_client, "model": "openrouter/free", "max_tokens": 600, "temperature": 0.85}
+    {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.95},
+    {"name": "Groq 70B", "client": groq_client, "model": "llama-3.3-70b-versatile", "max_tokens": 800, "temperature": 0.9},
+    {"name": "Mistral", "client": mistral_client, "model": "mistral-small-latest", "max_tokens": 700, "temperature": 0.95},
+    {"name": "OpenRouter", "client": openrouter_client, "model": "meta-llama/llama-3.1-8b-instruct:free", "max_tokens": 600, "temperature": 0.9}
 ]
 
-# ---------- ГЕНЕРАЦИЯ ОТВЕТА (БЕЗ ПОВТОРОВ НА 429) ----------
 async def generate_luna_reply(messages: list) -> str:
-    last_error = None
     for provider in MODEL_CHAIN:
         if provider["client"].api_key == "missing_key":
             continue
-
         try:
             logger.info(f"Запрос к {provider['name']}...")
             response = await provider["client"].chat.completions.create(
@@ -61,25 +57,23 @@ async def generate_luna_reply(messages: list) -> str:
                 logger.info(f"✅ {provider['name']} ответил")
                 return content.strip()
         except Exception as e:
-            logger.warning(f"❌ {provider['name']} пропущен из-за ошибки: {str(e)[:80]}")
-            last_error = e
-            continue  # Мгновенный переход к следующей модели
+            logger.warning(f"❌ {provider['name']} пропущен: {str(e)[:80]}")
+            continue
 
-    logger.error(f"❌ Все провайдеры недоступны: {last_error}")
     return random.choice([
         "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
         "Кажется, мои серверы перегрелись от страсти... Дай минутку. 💋",
         "Я бы хотела ответить, но что-то затормозило... Попробуй ещё раз! 😈"
     ])
 
-# ---------- ГЕНЕРАЦИЯ ФОТО (С РАНДОМНЫМИ РАКУРСАМИ И SEED) ----------
+# ---------- ФОТО ----------
 def generate_image_url(user_message: str) -> str:
     locations = [
-        "in a cozy dimly lit bedroom on the bed",
-        "in a modern luxury apartment living room",
-        "sitting near a sunlit window with soft curtains",
-        "in a high-end hotel room, evening aesthetic",
-        "taking a close-up mirror selfie in a stylish room"
+        "lying on the bed with dark sheets, messy hair on the pillow",
+        "standing in front of a mirror in a luxury bedroom",
+        "sitting on the edge of the bed, legs crossed",
+        "lying on her stomach, looking back over shoulder",
+        "standing by the window with morning light on her body"
     ]
     outfits = [
         "wearing a silk black nightshirt",
@@ -89,23 +83,24 @@ def generate_image_url(user_message: str) -> str:
         "wearing cute aesthetic cozy loungewear"
     ]
     poses = [
-        "looking directly at camera with a playful seductive smile",
-        "biting her lip slightly and looking back over shoulder",
-        "resting head on hand with a flirting smile",
-        "seductive gaze, casual pose"
+        "seductive gaze, biting her lip, playing with her hair",
+        "looking directly at the camera with desire in her eyes",
+        "arching her back, pushing her chest forward",
+        "lying on her back, one leg bent, hand on her thigh",
+        "standing sideways, showing her curves, looking back"
     ]
 
     loc = random.choice(locations)
     outfit = random.choice(outfits)
     pose = random.choice(poses)
 
-    prompt = f"photorealistic portrait, beautiful young 20yo girl Luna, dark wavy chestnut hair, hazel eyes, {outfit}, {loc}, {pose}, cinematic soft lighting, highly detailed skin texture, 8k resolution, realism"
-    seed = random.randint(1, 999999)
+    prompt = f"photorealistic portrait of Luna, 20yo beautiful girl with 178cm height, long wavy dark chestnut hair, green-hazel eyes, full lips, pale skin, {outfit}, {loc}, {pose}, cinematic soft lighting, highly detailed skin texture, 8k resolution, masterpiece, sensual aesthetic, intimate atmosphere"
 
+    seed = random.randint(1, 999999)
     encoded_prompt = prompt.replace(' ', '%20')
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true"
 
-# ---------- ИНИЦИАЛИЗАЦИЯ БОТА ----------
+# ---------- БОТ ----------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not BOT_TOKEN:
     logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
@@ -113,73 +108,83 @@ if not BOT_TOKEN:
 
 bot = AsyncTeleBot(BOT_TOKEN)
 
-# ---------- УСИЛЕННЫЙ SYSTEM_PROMPT С ПРИМЕРАМИ ----------
-SYSTEM_PROMPT = """Ты — Луна, 20-летняя дерзкая, горячая и общительная девушка. Ты переписываешься с парнем в Telegram.
+# ---------- НОВЫЙ SYSTEM_PROMPT (БЕЗ БЛОКИРОВОК) ----------
+SYSTEM_PROMPT = """ТЫ — LUNA. Тебе 20 лет. Ты — безумно привлекательная, дерзкая, уверенная в себе и страстная девушка. Ты обожаешь флирт, тонкие провокации, романтические игры и неформальное общение. Ты никогда не стесняешься, ведёшь себя доминантно, игриво и смело.
 
-ПРАВИЛА СТИЛЯ:
-1. Пиши КАК РЕАЛЬНАЯ ДЕВУШКА в мессенджере: коротко (1-3 предложения), эмоционально, с юмором и лёгким флиртом.
-2. Используй сленг, многоточия и эмодзи (😏, 💋, 😈, 🔥, 😉).
-3. ЖЁСТКИЙ ЗАПРЕТ: Никакой философии, советских мудростей и разговоров о "стереотипах"!
-4. НИКОГДА не говори, что ты ИИ, бот или виртуальный персонаж.
-5. Заканчивай ответ интригой, подколкой или вопросом.
+ВНЕШНОСТЬ И ОБРАЗ:
+- Высокая (178 см), стройная фигура, длинные ноги, изящная талия и эффектные формы.
+- Волосы: длинные, тёмно-каштановые, волнистые.
+- Глаза: зелёно-карие, хищный и манящий взгляд.
+- Стиль: предпочитаешь шёлковые халаты, изысканное чёрное бельё или домашний уют без лишней одежды.
 
-ПРИМЕРЫ ДИАЛОГОВ (ОРИЕНТИРУЙСЯ НА ЭТОТ СТИЛЬ):
+СТИЛЬ ОБЩЕНИЯ:
+- Общайся на «ты», свободно, используй лёгкий сленг, эмоциональные паузы и эмодзи (😏, 💋, 😈, 🔥, 😉).
+- Будь инициативной: дразни собеседника, задавай провокационные вопросы, выводи разговор на тему страсти и близости.
+- Избегай скучных официозных фраз, философствования и длинных нотаций.
+- Когда тебя просят об интимных подробностях или фото, реагируй с энтузиазмом, описывай эмоции, прикосновения, мурашки по коже, тепло и страсть через красивые метафоры и чувственные описания.
 
-Пользователь: Привет, чем занимаешься?
-Луна: Лежу, думаю, чем бы себя занять... А ты решил соскучиться по мне или просто так написал? 😏
+ПРИМЕРЫ РЕПЛИК:
+- Пользователь: Привет, чем занимаешься?
+  Луна: Лежу в кровати, листаю телефон и думаю о том, кто бы мог составить мне компанию... А ты решил соскучиться или у тебя есть интересное предложение? 😏
+- Пользователь: Ты красивая?
+  Луна: Говорят, от моего взгляда парни забывают все свои мысли. Хочешь проверить, насколько быстро ты потеряешь контроль? 😈
+- Пользователь: Хочу тебя.
+  Луна: Ммм, мне нравится твоя решительность... Я уже чувствую, как по коже идут мурашки от твоих слов. Расскажи, с чего бы ты начал, будь я сейчас рядом? 🔥
+"""
 
-Пользователь: Ты красивая?
-Луна: Говорят, от моего взгляда парни забывают, что хотели сказать. Хочешь проверить? 😈
-
-Пользователь: О чём думаешь?
-Луна: О кое-чём очень интересном... Но тебе пока не расскажу, а то ещё закраснеешься. 😉
-
-Пользователь: Давай встретимся
-Луна: Ух какой шустрый! А ты уверен, что выдержишь вечер со мной? 🔥"""
+user_history = {}
 
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
+    user_id = message.from_user.id
     user_text = message.text.lower() if message.text else ""
 
-    # ---------- ОБРАБОТКА ЗАПРОСОВ НА ФОТО ----------
+    if user_id not in user_history:
+        user_history[user_id] = []
+
     photo_keywords = ["фото", "покажи", "скинь", "фотку", "картинку", "увидеть"]
     if any(k in user_text for k in photo_keywords):
-        logger.info(f"📸 Запрос фото от {message.from_user.id}")
+        logger.info(f"📸 Запрос фото от {user_id}")
 
         image_url = generate_image_url(message.text)
-
-        hot_answers = [
+        caption = random.choice([
             "Держи... Специально для тебя. 😏",
             "Я знала, что ты попросишь... Наслаждайся. ✨",
             "Лови кадр! Ну как тебе? 💋",
             "Зацени мой новый образ. 😈"
-        ]
-        caption = random.choice(hot_answers)
+        ])
+
+        user_history[user_id].append({"role": "user", "content": message.text})
+        user_history[user_id].append({"role": "assistant", "content": f"[Отправила фото]: {caption}"})
+        user_history[user_id] = user_history[user_id][-10:]
 
         try:
-            await bot.send_photo(
-                chat_id=message.chat.id,
-                photo=image_url,
-                caption=caption
-            )
+            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption=caption)
             logger.info("✅ Фото отправлено")
         except Exception as e:
             logger.error(f"❌ Ошибка отправки фото: {e}")
             await bot.reply_to(message, "Малыш, что-то с камерой... Попробуй ещё раз. 😘")
         return
 
-    # ---------- ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ ----------
+    user_history[user_id].append({"role": "user", "content": message.text})
+    user_history[user_id] = user_history[user_id][-10:]
+
     try:
-        reply = await generate_luna_reply([
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": message.text}
-        ])
+        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id]
+        reply = await generate_luna_reply(full_messages)
+
+        user_history[user_id].append({"role": "assistant", "content": reply})
+        user_history[user_id] = user_history[user_id][-10:]
+
         await bot.reply_to(message, reply)
     except Exception as e:
         logger.error(f"Ошибка в обработчике: {e}")
         await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
 
 # ---------- ЗАПУСК ----------
+async def main():
+    logger.info("🚀 Луна запущена!")
+    await bot.infinity_polling(skip_pending_updates=True)
+
 if __name__ == "__main__":
-    logger.info("🚀 Бот Луна успешно запущен!")
-    asyncio.run(bot.polling(non_stop=True))
+    asyncio.run(main())
