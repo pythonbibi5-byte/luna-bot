@@ -3,6 +3,7 @@ import logging
 import asyncio
 import random
 from telebot.async_telebot import AsyncTeleBot
+from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openai import AsyncOpenAI
 
 logging.basicConfig(
@@ -133,41 +134,56 @@ SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — самая грязн�
 Ты сейчас лежишь голая на кровати, твои пальцы уже касаются твоей мокрой кожи. Ты начинаешь разговор первой. Ты хочешь, чтобы он кончил от одного твоего голоса."""
 
 # ---------- СЧЁТЧИКИ ----------
-user_counters = {}  # {user_id: {"messages": 0, "photos": 0, "auto_photo_sent": False}}
+user_counters = {}
+user_history = {}
 
-# ---------- ОБРАБОТЧИК ----------
+# ---------- КНОПКА ТЕСТОВОГО ПРОДОЛЖЕНИЯ ----------
+def create_test_keyboard():
+    keyboard = InlineKeyboardMarkup(row_width=1)
+    continue_button = InlineKeyboardButton(
+        text="🔥 Продолжить (тест)",
+        callback_data="continue_test"
+    )
+    keyboard.add(continue_button)
+    return keyboard
+
+# ---------- ОБРАБОТЧИК КНОПКИ ----------
+@bot.callback_query_handler(func=lambda call: call.data == "continue_test")
+async def handle_continue(call):
+    user_id = call.from_user.id
+    # Сбрасываем счётчик
+    user_counters[user_id] = {"messages": 0, "photos": 0, "auto_photo_sent": False}
+    user_history[user_id] = []
+    await bot.edit_message_text(
+        "🔥 Лимит сброшен! Можешь продолжать общаться со мной, детка. 😈",
+        chat_id=call.message.chat.id,
+        message_id=call.message.message_id
+    )
+    await bot.answer_callback_query(call.id, "Лимит сброшен! Пиши снова ❤️")
+
+# ---------- ОСНОВНОЙ ОБРАБОТЧИК ----------
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
     user_id = message.from_user.id
     user_text = message.text.lower() if message.text else ""
 
-    # Инициализация счётчика
+    # Инициализация
     if user_id not in user_counters:
         user_counters[user_id] = {"messages": 0, "photos": 0, "auto_photo_sent": False}
+    if user_id not in user_history:
+        user_history[user_id] = []
 
-    # Если пользователь уже отправил 8+ сообщений — предлагаем Luna Plus
+    # Если лимит исчерпан — показываем тестовую кнопку
     if user_counters[user_id]["messages"] >= 7:
-        await bot.reply_to(message, "🔥 Малыш, ты уже использовал все бесплатные сообщения. Хочешь продолжения? Купи Luna Plus и я покажу тебе всё, что ты хочешь. 😈")
+        keyboard = create_test_keyboard()
+        await bot.reply_to(
+            message,
+            "🔥 Малыш, ты уже использовал все бесплатные сообщения. Хочешь продолжения? Нажми кнопку ниже (тестовый режим). 😈",
+            reply_markup=keyboard
+        )
         return
 
-    # Проверяем, не отправлял ли уже фото (2 фото — лимит)
-    if user_counters[user_id]["photos"] >= 2:
-        # Обычный ответ без фото
-        user_counters[user_id]["messages"] += 1
-        user_history[user_id].append({"role": "user", "content": message.text})
-        user_history[user_id] = user_history[user_id][-10:]
-
-        try:
-            full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id]
-            reply = await generate_luna_reply(full_messages)
-            user_history[user_id].append({"role": "assistant", "content": reply})
-            await bot.reply_to(message, reply)
-        except Exception as e:
-            logger.error(f"Ошибка: {e}")
-            await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
-        return
-
-    # ---------- АВТОМАТИЧЕСКАЯ ОТПРАВКА ФОТО НА 7-М СООБЩЕНИИ ----------
+    # Авто-фото на 7-м сообщении
     if user_counters[user_id]["messages"] == 6 and not user_counters[user_id]["auto_photo_sent"]:
         user_counters[user_id]["auto_photo_sent"] = True
         image_url = generate_image_url(message.text)
@@ -177,7 +193,6 @@ async def handle_message(message):
             "Я уже вся мокрая... Хочешь увидеть больше? 💋"
         ])
 
-        # Сохраняем в контекст
         user_history[user_id].append({"role": "assistant", "content": f"[Отправила голое фото]: {caption}"})
         user_history[user_id] = user_history[user_id][-10:]
 
@@ -188,7 +203,7 @@ async def handle_message(message):
             logger.error(f"❌ Ошибка отправки фото: {e}")
         return
 
-    # ---------- ОБЫЧНЫЙ ОТВЕТ ----------
+    # Обычный ответ
     user_counters[user_id]["messages"] += 1
     user_history[user_id].append({"role": "user", "content": message.text})
     user_history[user_id] = user_history[user_id][-10:]
@@ -202,9 +217,6 @@ async def handle_message(message):
     except Exception as e:
         logger.error(f"Ошибка в обработчике: {e}")
         await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
-
-# ---------- ХРАНИЛИЩЕ КОНТЕКСТА ----------
-user_history = {}
 
 # ---------- ЗАПУСК ----------
 async def main():
