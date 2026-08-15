@@ -9,7 +9,8 @@ from groq import AsyncGroq
 # Настройка логирования
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Ключи зашиты напрямую
+TELEGRAM_TOKEN = "8984840458:AAFDhQLPf14FKWMGKU1wF66Dx5zqBsceR0E"
 GROQ_API_KEY = "gsk_rLUQ1fZeP04NmAl2Zrk-RWGdyb3FY1SPaBAc3g4nhn9ZhyiOPTIH"
 PORT = int(os.environ.get("PORT", 10000))
 
