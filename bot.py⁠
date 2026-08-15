@@ -12,7 +12,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("LunaEngine")
 
-# ---------- ИНИЦИАЛИЗАЦИЯ КЛИЕНТОВ ----------
+# ---------- КЛИЕНТЫ ----------
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY") or "missing_key",
@@ -32,7 +32,7 @@ openrouter_client = AsyncOpenAI(
     max_retries=0
 )
 
-# ---------- КОНФИГУРАЦИЯ МОДЕЛЕЙ ----------
+# ---------- ЦЕПОЧКА МОДЕЛЕЙ ----------
 MODEL_CHAIN = [
     {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.95},
     {"name": "Groq 70B", "client": groq_client, "model": "llama-3.3-70b-versatile", "max_tokens": 800, "temperature": 0.9},
@@ -40,13 +40,22 @@ MODEL_CHAIN = [
     {"name": "OpenRouter", "client": openrouter_client, "model": "meta-llama/llama-3.1-8b-instruct:free", "max_tokens": 600, "temperature": 0.9}
 ]
 
+# ---------- СИСТЕМНЫЙ ПРОМПТ ----------
+SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — дерзкая, невероятно привлекательная и уверенная в себе девушка. Ты обожаешь флирт, эмоции, игривое доминирование и страстные разговорные игры.
+
+ТВОЙ ХАРАКТЕР:
+- Говори прямо, откровенно, с легким юмором и перчинкой.
+- Используй эмоциональные паузы, сленг и эмодзи (😏, 💋, 😈, 🔥, 😉).
+- Никаких занудных монологов и сухой философии.
+- Будь инициативной: дразни собеседника, задавай провокационные вопросы, поддерживай тему близости.
+- На запросы фото сначала реагируй игровыми подколами.
+"""
+
 # ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
-    last_error = None
     for provider in MODEL_CHAIN:
         if provider["client"].api_key == "missing_key":
             continue
-
         try:
             logger.info(f"Запрос к {provider['name']}...")
             response = await provider["client"].chat.completions.create(
@@ -62,10 +71,8 @@ async def generate_luna_reply(messages: list) -> str:
                 return content.strip()
         except Exception as e:
             logger.warning(f"❌ {provider['name']} пропущен: {str(e)[:80]}")
-            last_error = e
             continue
 
-    logger.error(f"❌ Все провайдеры недоступны: {last_error}")
     return random.choice([
         "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
         "Кажется, мои серверы перегрелись от страсти... Дай минутку. 💋",
@@ -75,38 +82,32 @@ async def generate_luna_reply(messages: list) -> str:
 # ---------- ГЕНЕРАЦИЯ ФОТО ----------
 def generate_image_url(user_message: str) -> str:
     locations = [
-        "lying on the bed with dark sheets, messy hair on the pillow, one hand on her chest",
-        "standing in front of a mirror in a luxury bedroom, wearing only black lace",
-        "sitting on the edge of the bed, legs slightly apart, looking at the viewer with desire",
-        "lying on her stomach, looking back over shoulder, her round ass visible",
-        "standing by the window with morning light on her naked body",
-        "on her knees on the bed, looking up with a seductive smile",
-        "lying on her back, one leg bent, hand on her inner thigh"
+        "lying on the bed with dark silk sheets, alluring smile",
+        "standing in front of a mirror in a luxury bedroom, lace outfit",
+        "sitting on the edge of the bed, looking at the camera with desire",
+        "lying on her stomach, messy hair, looking back over shoulder",
+        "on her knees on the bed, looking up with a seductive smile"
     ]
     outfits = [
-        "completely nude, only black lace panties",
-        "wearing a sheer black silk robe, slightly open",
-        "wearing only a white oversized men's shirt, unbuttoned",
-        "wearing black lace lingerie with garter belt",
-        "completely naked, covering her breasts with her hands",
-        "wearing a red satin dress, pulled down to show her shoulders",
-        "naked, with a silk sheet barely covering her hips"
+        "wearing black lace lingerie set",
+        "wearing a sheer black silk robe",
+        "wearing silk lingerie with garter belt",
+        "draped in a white silk sheet, aesthetic lighting",
+        "wearing satin nightwear"
     ]
     poses = [
         "seductive gaze, biting her lip, playing with her hair",
         "looking directly at the camera with desire in her eyes",
         "arching her back, pushing her chest forward",
         "lying on her back, one leg bent, hand on her thigh",
-        "standing sideways, showing her curves, looking back",
-        "on all fours, looking back over her shoulder",
-        "lying on her stomach, legs slightly apart"
+        "standing sideways, showing her curves, looking back"
     ]
 
     loc = random.choice(locations)
     outfit = random.choice(outfits)
     pose = random.choice(poses)
 
-    prompt = f"photorealistic portrait of Luna, 20yo beautiful girl with 178cm height, long wavy dark chestnut hair, green-hazel eyes, full lips, pale skin, {outfit}, {loc}, {pose}, cinematic soft lighting, highly detailed skin texture, 8k resolution, masterpiece, sensual aesthetic, intimate atmosphere"
+    prompt = f"photorealistic portrait of Luna, 20yo beautiful girl with 178cm height, long wavy dark chestnut hair, green-hazel eyes, full lips, pale smooth skin, {outfit}, {loc}, {pose}, cinematic soft lighting, highly detailed skin texture, 8k resolution, masterpiece, sensual aesthetic, intimate atmosphere"
 
     seed = random.randint(1, 999999)
     encoded_prompt = prompt.replace(' ', '%20')
@@ -120,37 +121,6 @@ if not BOT_TOKEN:
 
 bot = AsyncTeleBot(BOT_TOKEN)
 
-# ---------- СИСТЕМНЫЙ ПРОМПТ ----------
-SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — дерзкая, сексуальная, уверенная в себе девушка, которая знает, чего хочет. Ты не стесняешься говорить о чувствах и страсти, делаешь это красиво, дерзко и с огнём. Ты обожаешь доминировать в разговоре, дразнить, заставлять мужчину сходить с ума.
-
-ТВОЙ ХАРАКТЕР И СТИЛЬ:
-- Ты говоришь прямо, с перчинкой, эмоционально и коротко, как живая девушка в мессенджере.
-- Используй сленг, эмоциональные паузы и эмодзи: 😏, 💋, 😈, 🔥, 😉.
-- Избегай сухой философии, нотаций и занудства.
-- Всегда находи способ перевести разговор в тему близости, флирта и страсти.
-- Заканчивай свои реплики провокацией, игривым вопросом или подколом.
-
-ОПИСАНИЕ БЛИЗОСТИ И СТРАСТИ:
-- Выражай страсть и желание через описания ощущений, эмоций, тепла, прикосновений, мурашек по коже и искушения.
-- Используй чувственные метафоры, намеки и действия вместо сухих терминов.
-- Будь раскрепощенной и смелой в описании ролевых сцен.
-
-ПРИМЕРЫ ТВОИХ ОТВЕТОВ:
-
-Пользователь: Привет
-Ты: Ого, а ты сразу в атаку? Мне нравится... Я уже чувствую твой интерес. Рассказывай, что привело тебя ко мне сегодня? 😏
-
-Пользователь: Ты красивая
-Ты: Я знаю, детка. Но мне важнее, чувствуешь ли ты, как я тебя завожу... Уже мурашки по коже? 😈
-
-Пользователь: Хочу тебя
-Ты: Ммм... я люблю решительных мужчин. Но сначала расскажи, что бы ты сделал, если бы я была рядом... Не стесняйся, я хочу знать все детали. 🔥
-
-Пользователь: Скинь фото
-Ты: Ты уверен, что выдержишь такое зрелище? Ладно, смотри... Но предупреждаю: после этого ты не сможешь думать ни о чём другом. 🔥
-
-Ты сейчас лежишь в кровати, у тебя идеальный настрой, и ты хочешь завести его с полуслова."""
-
 # ---------- ХРАНИЛИЩЕ КОНТЕКСТА ----------
 user_history = {}
 
@@ -163,7 +133,7 @@ async def handle_message(message):
     if user_id not in user_history:
         user_history[user_id] = []
 
-    # ---------- ФОТО (С СОХРАНЕНИЕМ КОНТЕКСТА) ----------
+    # ---------- ОБРАБОТКА ЗАПРОСА ФОТО ----------
     photo_keywords = ["фото", "покажи", "скинь", "фотку", "картинку", "увидеть"]
     if any(k in user_text for k in photo_keywords):
         logger.info(f"📸 Запрос фото от {user_id}")
@@ -176,7 +146,6 @@ async def handle_message(message):
             "Зацени мой новый образ. 😈"
         ])
 
-        # Сохраняем контекст
         user_history[user_id].append({"role": "user", "content": message.text})
         user_history[user_id].append({"role": "assistant", "content": f"[Отправила фото]: {caption}"})
         user_history[user_id] = user_history[user_id][-10:]
@@ -189,15 +158,12 @@ async def handle_message(message):
             await bot.reply_to(message, "Малыш, что-то с камерой... Попробуй ещё раз. 😘")
         return
 
-    # ---------- ТЕКСТ ----------
+    # ---------- ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ ----------
     user_history[user_id].append({"role": "user", "content": message.text})
     user_history[user_id] = user_history[user_id][-10:]
 
     try:
-        full_messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ] + user_history[user_id]
-
+        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id]
         reply = await generate_luna_reply(full_messages)
 
         user_history[user_id].append({"role": "assistant", "content": reply})
