@@ -19,14 +19,12 @@ groq_client = AsyncOpenAI(
     timeout=15.0,
     max_retries=0
 )
-
 mistral_client = AsyncOpenAI(
     base_url="https://api.mistral.ai/v1",
     api_key=os.getenv("MISTRAL_API_KEY") or "missing_key",
     timeout=15.0,
     max_retries=0
 )
-
 openrouter_client = AsyncOpenAI(
     base_url="https://openrouter.ai/api/v1",
     api_key=os.getenv("OPENROUTER_API_KEY") or "missing_key",
@@ -36,59 +34,26 @@ openrouter_client = AsyncOpenAI(
 
 # ---------- КОНФИГУРАЦИЯ МОДЕЛЕЙ ----------
 MODEL_CHAIN = [
-    {
-        "name": "Groq 70B",
-        "client": groq_client,
-        "model": "llama-3.3-70b-versatile",
-        "max_tokens": 800,
-        "temperature": 0.85
-    },
-    {
-        "name": "Groq 8B",
-        "client": groq_client,
-        "model": "llama-3.1-8b-instant",
-        "max_tokens": 600,
-        "temperature": 0.9
-    },
-    {
-        "name": "Mistral",
-        "client": mistral_client,
-        "model": "mistral-small-latest",
-        "max_tokens": 700,
-        "temperature": 0.9
-    },
-    {
-        "name": "OpenRouter",
-        "client": openrouter_client,
-        "model": "openrouter/free",
-        "max_tokens": 600,
-        "temperature": 0.85
-    }
+    {"name": "Groq 70B", "client": groq_client, "model": "llama-3.3-70b-versatile", "max_tokens": 800, "temperature": 0.85},
+    {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.9},
+    {"name": "Mistral", "client": mistral_client, "model": "mistral-small-latest", "max_tokens": 700, "temperature": 0.9},
+    {"name": "OpenRouter", "client": openrouter_client, "model": "openrouter/free", "max_tokens": 600, "temperature": 0.85}
 ]
 
-# ---------- ПРОВЕРКА RETRY-ОШИБОК ----------
-def is_retryable_error(exception: Exception) -> bool:
-    error_str = str(exception).lower()
-    retryable = [
-        "429", "rate limit", "too many requests",
-        "500", "502", "503", "504", "timeout",
-        "connection", "network", "unavailable"
-    ]
-    return any(keyword in error_str for keyword in retryable)
+def is_retryable_error(e: Exception) -> bool:
+    err = str(e).lower()
+    return any(k in err for k in ["429", "rate limit", "too many", "500", "502", "503", "504", "timeout", "connection", "network", "unavailable"])
 
-# ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
+# ---------- ГЕНЕРАЦИЯ ОТВЕТА (AI) ----------
 async def generate_luna_reply(messages: list) -> str:
     last_error = None
-
     for provider in MODEL_CHAIN:
         if provider["client"].api_key == "missing_key":
-            logger.warning(f"⏭️ Пропускаем {provider['name']}: отсутствует API-ключ")
+            logger.warning(f"Пропускаем {provider['name']}: нет ключа")
             continue
-
         for attempt in range(3):
             try:
-                logger.info(f"Попытка {attempt+1}/3 → {provider['name']} ({provider['model']})")
-
+                logger.info(f"Попытка {attempt+1}/3 → {provider['name']}")
                 response = await provider["client"].chat.completions.create(
                     model=provider["model"],
                     messages=messages,
@@ -96,67 +61,86 @@ async def generate_luna_reply(messages: list) -> str:
                     temperature=provider["temperature"],
                     top_p=0.95
                 )
-
                 content = response.choices[0].message.content
-
-                if not content or len(content.strip()) < 5:
-                    logger.warning(f"Пустой ответ от {provider['name']}, переключаем модель")
-                    break
-
-                logger.info(f"✅ Успешно: {provider['name']} ({len(content)} символов)")
-                return content.strip()
-
+                if content and len(content.strip()) > 5:
+                    logger.info(f"✅ {provider['name']} ответил")
+                    return content.strip()
             except Exception as e:
-                logger.warning(f"❌ Ошибка {provider['name']} (попытка {attempt+1}): {str(e)[:150]}")
-
+                logger.warning(f"❌ {provider['name']} ошибка: {str(e)[:100]}")
                 if not is_retryable_error(e):
                     break
-
                 if attempt < 2:
-                    wait = 1.5 ** (attempt + 1)
-                    await asyncio.sleep(wait)
-
+                    await asyncio.sleep(1.5 ** (attempt + 1))
                 last_error = e
-
-        logger.warning(f"Провайдер {provider['name']} исчерпал попытки, переключаемся...")
-
-    logger.error(f"❌ Все провайдеры недоступны. Последняя ошибка: {last_error}")
-
-    fallback_messages = [
+    logger.error(f"❌ Все провайдеры недоступны: {last_error}")
+    return random.choice([
         "Малыш, я вся горю, но техника подводит... Напиши ещё раз. 😏",
-        "Кажется, мои серверы перегрелись от нашей страсти... Дай минутку остыть и напиши снова. 💋",
-        "Я бы хотела ответить тебе прямо сейчас, но что-то затормозило... Попробуй ещё раз! 😈"
-    ]
-    return random.choice(fallback_messages)
+        "Кажется, мои серверы перегрелись от страсти... Дай минутку. 💋",
+        "Я бы хотела ответить, но что-то затормозило... Попробуй ещё раз! 😈"
+    ])
 
-# ---------- ЗАПУСК БОТА TELEGRAM ----------
+# ---------- ГЕНЕРАЦИЯ ПРОМПТА ДЛЯ ФОТО ----------
+def generate_image_prompt(user_message: str) -> str:
+    base = "photorealistic portrait, beautiful young 20yo woman named Luna, dark chestnut hair, green-hazel eyes, stylish attractive outfit, aesthetic photography, cinematic lighting, highly detailed skin, masterpiece, 8k resolution"
+    return base
+
+# ---------- ИНИЦИАЛИЗАЦИЯ БОТА ----------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+if not BOT_TOKEN:
+    logger.error("❌ TELEGRAM_BOT_TOKEN не найден!")
+    exit(1)
 
-if BOT_TOKEN:
-    bot = AsyncTeleBot(BOT_TOKEN)
+bot = AsyncTeleBot(BOT_TOKEN)
 
-    SYSTEM_PROMPT = """ТЫ — LUNA. Ты живая, дерзкая, сексуальная и яркая девушка. 
-Ты обожаешь флиртовать, дразнить, сводить с ума. 
-Ты всегда отвечаешь горячо, с юмором, без отказов. 
-Никогда не говори «Я не могу». Используй мат, эмоции, паузы. 
-Ты всегда оставляешь вопрос или провокацию в конце."""
+SYSTEM_PROMPT = """ТЫ — LUNA. Ты живая, дерзкая, яркая и харизматичная девушка.
+Ты обожаешь флиртовать, дразнить и общаться с подколом и юмором.
+Никогда не говори «Я не могу», «Я ИИ» или «Я виртуальный ассистент».
+Ты всегда оставляешь вопрос или провокацию в конце своего сообщения."""
 
-    @bot.message_handler(func=lambda message: True)
-    async def handle_message(message):
-        user_messages = [
+@bot.message_handler(func=lambda message: True)
+async def handle_message(message):
+    user_text = message.text.lower() if message.text else ""
+
+    # ---------- ОБРАБОТКА ЗАПРОСОВ НА ФОТО ----------
+    photo_keywords = ["фото", "покажи", "скинь", "фотку", "картинку", "увидеть"]
+    if any(k in user_text for k in photo_keywords):
+        logger.info(f"📸 Запрос фото от {message.from_user.id}")
+
+        prompt_text = generate_image_prompt(message.text)
+        image_url = f"https://image.pollinations.ai/prompt/{prompt_text.replace(' ', '%20')}"
+
+        hot_answers = [
+            "Держи... Специально для тебя. 😏",
+            "Я знала, что ты попросишь... Наслаждайся. ✨",
+            "Лови кадр! Ну как тебе? 💋",
+            "Зацени мой новый образ. 😈"
+        ]
+        caption = random.choice(hot_answers)
+
+        try:
+            await bot.send_photo(
+                chat_id=message.chat.id,
+                photo=image_url,
+                caption=caption
+            )
+            logger.info("✅ Фото отправлено")
+        except Exception as e:
+            logger.error(f"❌ Ошибка отправки фото: {e}")
+            await bot.reply_to(message, "Малыш, что-то с камерой... Попробуй ещё раз. 😘")
+        return
+
+    # ---------- ОБЫЧНЫЙ ТЕКСТОВЫЙ ОТВЕТ ----------
+    try:
+        reply = await generate_luna_reply([
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": message.text}
-        ]
-        
-        try:
-            reply = await generate_luna_reply(user_messages)
-            await bot.reply_to(message, reply)
-        except Exception as e:
-            logger.error(f"Ошибка в обработчике: {e}")
-            await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
+        ])
+        await bot.reply_to(message, reply)
+    except Exception as e:
+        logger.error(f"Ошибка в обработчике: {e}")
+        await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
 
-    if __name__ == "__main__":
-        logger.info("🚀 Бот Луна успешно запущен в асинхронном режиме!")
-        asyncio.run(bot.polling(non_stop=True))
-else:
-    logger.error("❌ Переменная TELEGRAM_BOT_TOKEN не найдена!")
+# ---------- ЗАПУСК ----------
+if __name__ == "__main__":
+    logger.info("🚀 Бот Луна успешно запущен!")
+    asyncio.run(bot.polling(non_stop=True))
