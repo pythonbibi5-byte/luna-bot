@@ -2,7 +2,7 @@ import os
 import logging
 import asyncio
 import random
-import urllib.parse
+import urllib.parse  # 👈 ДОБАВЛЯЕМ ЭТОТ ИМПОРТ
 import requests
 from threading import Thread
 from flask import Flask
@@ -55,7 +55,7 @@ MODEL_CHAIN = [
     {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.95},
 ]
 
-# ---------- ГЕНЕРАЦИЯ ПРОМПТА ЧЕРЕЗ GROQ (ДЛЯ ФОТО) ----------
+# ---------- ГЕНЕРАЦИЯ ПРОМПТА ЧЕРЕЗ GROQ ----------
 async def generate_image_prompt(user_request: str) -> str:
     try:
         response = await groq_client.chat.completions.create(
@@ -86,7 +86,6 @@ async def generate_image_prompt(user_request: str) -> str:
 
 # ---------- ГЕНЕРАЦИЯ ФОТО ----------
 def _sync_generate_image(prompt: str) -> str:
-    # 1. Пытаемся через Pollinations
     seed = random.randint(1, 999999)
     encoded_prompt = urllib.parse.quote(prompt + ", aesthetic, sensual, soft lighting, elegant")
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true&width=512&height=768&enhance=true"
@@ -165,19 +164,35 @@ async def handle_photo(message):
         logger.error(f"Ошибка фото: {e}")
         await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
 
-# ---------- АВТО-РЕАКЦИЯ НА "СКИНЬ ФОТО" ----------
-@bot.message_handler(func=lambda message: "скинь фото" in message.text.lower() or "фото" in message.text.lower())
+# ---------- АВТО-РЕАКЦИЯ НА "СКИНЬ ФОТО" (С Groq) ----------
+@bot.message_handler(func=lambda message: "скинь фото" in message.text.lower() or "покажи" in message.text.lower())
 async def auto_photo(message):
-    if message.text and ("скинь фото" in message.text.lower() or "покажи" in message.text.lower()):
-        user_id = message.from_user.id
-        await bot.reply_to(message, "📸 Держи, создатель...")
-        prompt = await generate_image_prompt("Luna, sensual, intimate, aesthetic, soft lighting")
-        image_url = await generate_image(prompt)
-        try:
-            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
-        except Exception as e:
-            logger.error(f"Ошибка авто-фото: {e}")
-            await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
+    if not message.text:
+        return
+
+    user_text = message.text.lower()
+    
+    # Определяем стиль в зависимости от запроса
+    if "киск" in user_text or "пизд" in user_text or "пис" in user_text:
+        style = "intimate close-up, sensual, soft lighting, artistic nude, aesthetic"
+    elif "поп" in user_text or "зад" in user_text or "жоп" in user_text:
+        style = "sensual back view, elegant curves, soft lighting, artistic"
+    elif "груд" in user_text or "сись" in user_text or "соск" in user_text:
+        style = "sensual portrait, elegant, soft lighting, aesthetic"
+    else:
+        style = "sensual, intimate, aesthetic, soft lighting"
+
+    await bot.reply_to(message, "📸 Держи, создатель...")
+    
+    # Генерируем промпт через Groq
+    prompt = await generate_image_prompt(f"Luna, {style}, beautiful, 20yo, dark hair, green-hazel eyes")
+    image_url = await generate_image(prompt)
+    
+    try:
+        await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
+    except Exception as e:
+        logger.error(f"Ошибка авто-фото: {e}")
+        await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
 
 # ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
@@ -212,9 +227,9 @@ async def handle_message(message):
     user_id = message.from_user.id
     user_text = message.text
 
-    # Проверяем, не запрос ли это на фото (чтобы не дублировать)
+    # Пропускаем запросы на фото (они обрабатываются в auto_photo)
     if "скинь фото" in user_text.lower() or "покажи" in user_text.lower():
-        return  # Отдаём приоритет auto_photo
+        return
 
     add_to_history(user_id, "user", user_text)
 
