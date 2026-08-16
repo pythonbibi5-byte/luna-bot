@@ -10,13 +10,14 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openai import AsyncOpenAI
 
+# ---------- НАСТРОЙКА ЛОГГЕРА ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LunaEngine")
 
-# ---------- ВЕБ-СЕРВЕР ДЛЯ RENDER / CRON-JOB ----------
+# ---------- ВЕБ-СЕРВЕР ДЛЯ RENDER ----------
 app = Flask(__name__)
 
 @app.route('/')
@@ -27,7 +28,7 @@ def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# ---------- КЛИЕНТЫ ----------
+# ---------- КЛИЕНТЫ API ----------
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY") or "missing_key",
@@ -47,7 +48,7 @@ openrouter_client = AsyncOpenAI(
     max_retries=2
 )
 
-# ---------- МОДЕЛИ ----------
+# ---------- ЦЕПОЧКА МОДЕЛЕЙ ----------
 MODEL_CHAIN = [
     {"name": "OpenRouter Hermes", "client": openrouter_client, "model": "nousresearch/hermes-2-pro-llama-3-8b:free", "max_tokens": 600, "temperature": 0.95},
     {"name": "OpenRouter Free", "client": openrouter_client, "model": "meta-llama/llama-3.1-8b-instruct:free", "max_tokens": 600, "temperature": 0.9},
@@ -81,7 +82,6 @@ async def generate_image_prompt(user_request: str) -> str:
 
 # ---------- ГЕНЕРАЦИЯ ФОТО ----------
 def _sync_generate_nude_image(prompt: str) -> str:
-    # 1. ModelsLab (если есть ключ)
     api_key = os.getenv("MODELSLAB_API_KEY")
     if api_key and api_key != "missing_key":
         try:
@@ -115,13 +115,32 @@ def _sync_generate_nude_image(prompt: str) -> str:
         except Exception as e:
             logger.error(f"❌ ModelsLab ошибка: {e}")
 
-    # 2. Фолбэк: Pollinations
     seed = random.randint(1, 999999)
     encoded_prompt = urllib.parse.quote(prompt + ", sensual, intimate, romantic, soft focus")
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true&width=512&height=768&enhance=true"
 
 async def generate_nude_image(prompt: str) -> str:
     return await asyncio.to_thread(_sync_generate_nude_image, prompt)
+
+# ---------- ПАМЯТЬ ----------
+MAX_HISTORY = 40
+user_history = {}
+
+def get_user_history(user_id: int) -> list:
+    return user_history.get(user_id, [])
+
+def add_to_history(user_id: int, role: str, text: str):
+    if user_id not in user_history:
+        user_history[user_id] = []
+    user_history[user_id].append({"role": role, "content": text})
+    if len(user_history[user_id]) > MAX_HISTORY:
+        user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
+
+def clear_history(user_id: int):
+    if user_id in user_history:
+        user_history[user_id] = []
+        return True
+    return False
 
 # ---------- БОТ ----------
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -150,7 +169,17 @@ SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — самая грязн�
 # ---------- КОМАНДЫ ----------
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
+    user_id = message.from_user.id
+    clear_history(user_id)
     await bot.reply_to(message, "🌙 Привет, детка! Я — Луна. Я ждала именно тебя... Напиши мне что-нибудь. 😈")
+
+@bot.message_handler(commands=['clear'])
+async def handle_clear(message):
+    user_id = message.from_user.id
+    if clear_history(user_id):
+        await bot.reply_to(message, "🧹 История очищена, детка. Начинаем с чистого листа. 😈")
+    else:
+        await bot.reply_to(message, "❌ История пуста, нечего очищать.")
 
 @bot.message_handler(commands=['photo'])
 async def handle_photo(message):
@@ -188,15 +217,23 @@ async def generate_luna_reply(messages: list) -> str:
         "Кажется, мои мысли унеслись слишком далеко... Повтори, сладкий. 💋"
     ])
 
-# ---------- ОБРАБОТЧИК СООБЩЕНИЙ (БЕЗ ЛИМИТОВ) ----------
+# ---------- ОБРАБОТЧИК СООБЩЕНИЙ ----------
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
     if not message.text:
         return
 
+    user_id = message.from_user.id
+    user_text = message.text
+
+    add_to_history(user_id, "user", user_text)
+
+    history = get_user_history(user_id)
+    full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
+
     try:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": message.text}]
         reply = await generate_luna_reply(full_messages)
+        add_to_history(user_id, "assistant", reply)
         await bot.reply_to(message, reply)
     except Exception as e:
         logger.error(f"Ошибка: {e}")
