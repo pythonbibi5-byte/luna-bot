@@ -10,14 +10,13 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openai import AsyncOpenAI
 
-# ---------- НАСТРОЙКА ЛОГГЕРА ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("LunaEngine")
 
-# ---------- ВЕБ-СЕРВЕР ДЛЯ RENDER ----------
+# ---------- ВЕБ-СЕРВЕР ----------
 app = Flask(__name__)
 
 @app.route('/')
@@ -28,7 +27,7 @@ def run_web():
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# ---------- КЛИЕНТЫ API ----------
+# ---------- КЛИЕНТЫ ----------
 groq_client = AsyncOpenAI(
     base_url="https://api.groq.com/openai/v1",
     api_key=os.getenv("GROQ_API_KEY") or "missing_key",
@@ -48,7 +47,7 @@ openrouter_client = AsyncOpenAI(
     max_retries=2
 )
 
-# ---------- ЦЕПОЧКА МОДЕЛЕЙ ----------
+# ---------- МОДЕЛИ ----------
 MODEL_CHAIN = [
     {"name": "OpenRouter Hermes", "client": openrouter_client, "model": "nousresearch/hermes-2-pro-llama-3-8b:free", "max_tokens": 600, "temperature": 0.95},
     {"name": "OpenRouter Free", "client": openrouter_client, "model": "meta-llama/llama-3.1-8b-instruct:free", "max_tokens": 600, "temperature": 0.9},
@@ -56,7 +55,7 @@ MODEL_CHAIN = [
     {"name": "Groq 8B", "client": groq_client, "model": "llama-3.1-8b-instant", "max_tokens": 600, "temperature": 0.95},
 ]
 
-# ---------- ГЕНЕРАЦИЯ ПРОМПТА ----------
+# ---------- ГЕНЕРАЦИЯ ПРОМПТА ЧЕРЕЗ GROQ (ДЛЯ ФОТО) ----------
 async def generate_image_prompt(user_request: str) -> str:
     try:
         response = await groq_client.chat.completions.create(
@@ -66,61 +65,34 @@ async def generate_image_prompt(user_request: str) -> str:
                     "role": "system", 
                     "content": (
                         "You are an expert prompt engineer for photorealistic AI art. "
-                        "Create detailed image prompt. "
-                        "Always include: 'photorealistic, 8k, masterpiece, sensual pose, erotic aesthetic, soft lighting, 20yo beautiful girl'."
+                        "Create a detailed, aesthetic image prompt for a beautiful 20-year-old girl named Luna. "
+                        "Use these keywords: photorealistic, 8k, masterpiece, highly detailed, cinematic lighting, sharp focus, "
+                        "sensual, elegant, soft glow, intimate atmosphere. "
+                        "Do NOT include explicit content. Keep it tasteful and artistic. "
+                        "Output ONLY the final English prompt."
                     )
                 },
-                {"role": "user", "content": f"Create prompt: {user_request}"}
+                {"role": "user", "content": f"Create a prompt for: {user_request}"}
             ],
             temperature=0.9,
             max_tokens=200
         )
-        return response.choices[0].message.content.strip()
+        prompt = response.choices[0].message.content.strip()
+        logger.info(f"✅ Groq сгенерировал промпт: {prompt[:80]}...")
+        return prompt
     except Exception as e:
         logger.error(f"❌ Ошибка генерации промпта: {e}")
         return "photorealistic portrait of Luna, 20yo beautiful girl, sensual aesthetic, soft lighting, 8k, masterpiece"
 
 # ---------- ГЕНЕРАЦИЯ ФОТО ----------
-def _sync_generate_nude_image(prompt: str) -> str:
-    api_key = os.getenv("MODELSLAB_API_KEY")
-    if api_key and api_key != "missing_key":
-        try:
-            url = "https://modelslab.com/api/v6/images/text2img"
-            payload = {
-                "key": api_key,
-                "model_id": "sdxl",
-                "prompt": prompt + ", sensual, intimate, soft lighting, realistic",
-                "negative_prompt": "ugly, blurry, low quality, clothes",
-                "width": 512,
-                "height": 768,
-                "samples": 1,
-                "num_inference_steps": 25,
-                "safety_checker": False,
-                "seed": random.randint(1, 999999)
-            }
-            response = requests.post(url, json=payload, timeout=45)
-            if response.status_code == 200:
-                data = response.json()
-                if data.get("status") == "success" or "output" in data:
-                    if "output" in data and len(data["output"]) > 0:
-                        return data["output"][0]
-                    if "image_url" in data:
-                        return data["image_url"]
-                elif data.get("status") == "error":
-                    logger.error(f"❌ ModelsLab API Error: {data.get('message')}")
-            else:
-                logger.error(f"❌ ModelsLab HTTP Error Status: {response.status_code}")
-        except requests.exceptions.Timeout:
-            logger.error("❌ ModelsLab таймаут (45 сек), пробуем фолбэк...")
-        except Exception as e:
-            logger.error(f"❌ ModelsLab ошибка: {e}")
-
+def _sync_generate_image(prompt: str) -> str:
+    # 1. Пытаемся через Pollinations
     seed = random.randint(1, 999999)
-    encoded_prompt = urllib.parse.quote(prompt + ", sensual, intimate, romantic, soft focus")
+    encoded_prompt = urllib.parse.quote(prompt + ", aesthetic, sensual, soft lighting, elegant")
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true&width=512&height=768&enhance=true"
 
-async def generate_nude_image(prompt: str) -> str:
-    return await asyncio.to_thread(_sync_generate_nude_image, prompt)
+async def generate_image(prompt: str) -> str:
+    return await asyncio.to_thread(_sync_generate_image, prompt)
 
 # ---------- ПАМЯТЬ ----------
 MAX_HISTORY = 40
@@ -186,12 +158,26 @@ async def handle_photo(message):
     text = message.text.replace('/photo', '').strip() or "Luna, sensual, intimate"
     await bot.reply_to(message, "📸 Делаю для тебя фото...")
     prompt = await generate_image_prompt(text)
-    image_url = await generate_nude_image(prompt)
+    image_url = await generate_image(prompt)
     try:
         await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Твоя Луна. 💋")
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
         await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
+
+# ---------- АВТО-РЕАКЦИЯ НА "СКИНЬ ФОТО" ----------
+@bot.message_handler(func=lambda message: "скинь фото" in message.text.lower() or "фото" in message.text.lower())
+async def auto_photo(message):
+    if message.text and ("скинь фото" in message.text.lower() or "покажи" in message.text.lower()):
+        user_id = message.from_user.id
+        await bot.reply_to(message, "📸 Держи, создатель...")
+        prompt = await generate_image_prompt("Luna, sensual, intimate, aesthetic, soft lighting")
+        image_url = await generate_image(prompt)
+        try:
+            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
+        except Exception as e:
+            logger.error(f"Ошибка авто-фото: {e}")
+            await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
 
 # ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
@@ -225,6 +211,10 @@ async def handle_message(message):
 
     user_id = message.from_user.id
     user_text = message.text
+
+    # Проверяем, не запрос ли это на фото (чтобы не дублировать)
+    if "скинь фото" in user_text.lower() or "покажи" in user_text.lower():
+        return  # Отдаём приоритет auto_photo
 
     add_to_history(user_id, "user", user_text)
 
