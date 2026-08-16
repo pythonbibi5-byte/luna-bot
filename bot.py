@@ -10,7 +10,6 @@ from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
 from openai import AsyncOpenAI
 
-# ---------- НАСТРОЙКА ЛОГГЕРА ----------
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -80,9 +79,9 @@ async def generate_image_prompt(user_request: str) -> str:
         logger.error(f"❌ Ошибка генерации промпта: {e}")
         return "photorealistic portrait of Luna, 20yo beautiful girl, sensual aesthetic, soft lighting, 8k, masterpiece"
 
-# ---------- ГЕНЕРАЦИЯ ФОТО (С ИСПРАВЛЕННЫМИ ТАЙМАУТАМИ) ----------
+# ---------- ГЕНЕРАЦИЯ ФОТО ----------
 def _sync_generate_nude_image(prompt: str) -> str:
-    # 1. ModelsLab (работает при наличии валидного API ключа)
+    # 1. ModelsLab (если есть ключ)
     api_key = os.getenv("MODELSLAB_API_KEY")
     if api_key and api_key != "missing_key":
         try:
@@ -99,11 +98,9 @@ def _sync_generate_nude_image(prompt: str) -> str:
                 "safety_checker": False,
                 "seed": random.randint(1, 999999)
             }
-            # Увеличен таймаут до 45 сек, чтобы ModelsLab успел сгенерировать
             response = requests.post(url, json=payload, timeout=45)
             if response.status_code == 200:
                 data = response.json()
-                # Проверка успешного ответа и наличия массива ссылок
                 if data.get("status") == "success" or "output" in data:
                     if "output" in data and len(data["output"]) > 0:
                         return data["output"][0]
@@ -118,7 +115,7 @@ def _sync_generate_nude_image(prompt: str) -> str:
         except Exception as e:
             logger.error(f"❌ ModelsLab ошибка: {e}")
 
-    # 2. Быстрый фолбэк: Pollinations (стабильная генерация)
+    # 2. Фолбэк: Pollinations
     seed = random.randint(1, 999999)
     encoded_prompt = urllib.parse.quote(prompt + ", sensual, intimate, romantic, soft focus")
     return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true&width=512&height=768&enhance=true"
@@ -150,18 +147,6 @@ SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 лет. Ты — самая грязн�
 
 Ты сейчас лежишь голая на кровати, пальцы касаются твоей мокрой киски. Ты хочешь, чтобы он трахнул тебя."""
 
-user_counters = {}
-user_history = {}
-
-def create_test_keyboard():
-    keyboard = InlineKeyboardMarkup(row_width=1)
-    continue_button = InlineKeyboardButton(
-        text="🔥 Продолжить (тест)",
-        callback_data="continue_test"
-    )
-    keyboard.add(continue_button)
-    return keyboard
-
 # ---------- КОМАНДЫ ----------
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
@@ -178,18 +163,6 @@ async def handle_photo(message):
     except Exception as e:
         logger.error(f"Ошибка фото: {e}")
         await bot.reply_to(message, "❌ Не удалось отправить фото, попробуй ещё раз.")
-
-@bot.callback_query_handler(func=lambda call: call.data == "continue_test")
-async def handle_continue(call):
-    user_id = call.from_user.id
-    user_counters[user_id] = {"messages": 0, "photos": 0, "auto_photo_sent": False}
-    user_history[user_id] = []
-    await bot.edit_message_text(
-        "🔥 Лимит сброшен! Можешь продолжать общаться со мной, детка. 😈",
-        chat_id=call.message.chat.id,
-        message_id=call.message.message_id
-    )
-    await bot.answer_callback_query(call.id, "Лимит сброшен!")
 
 # ---------- ГЕНЕРАЦИЯ ОТВЕТА ----------
 async def generate_luna_reply(messages: list) -> str:
@@ -215,54 +188,15 @@ async def generate_luna_reply(messages: list) -> str:
         "Кажется, мои мысли унеслись слишком далеко... Повтори, сладкий. 💋"
     ])
 
-# ---------- ОБРАБОТЧИК СООБЩЕНИЙ ----------
+# ---------- ОБРАБОТЧИК СООБЩЕНИЙ (БЕЗ ЛИМИТОВ) ----------
 @bot.message_handler(func=lambda message: True)
 async def handle_message(message):
     if not message.text:
         return
 
-    user_id = message.from_user.id
-
-    if user_id not in user_counters:
-        user_counters[user_id] = {"messages": 0, "photos": 0, "auto_photo_sent": False}
-    if user_id not in user_history:
-        user_history[user_id] = []
-
-    user_counters[user_id]["messages"] += 1
-
-    if user_counters[user_id]["messages"] > 7:
-        keyboard = create_test_keyboard()
-        await bot.reply_to(
-            message,
-            "🔥 Малыш, ты использовал все бесплатные сообщения. Нажми кнопку ниже, чтобы продолжить. 😈",
-            reply_markup=keyboard
-        )
-        return
-
-    if user_counters[user_id]["messages"] == 7 and not user_counters[user_id]["auto_photo_sent"]:
-        user_counters[user_id]["auto_photo_sent"] = True
-        prompt = await generate_image_prompt("Luna completely naked, sensual pose, bedroom, soft lighting")
-        image_url = await generate_nude_image(prompt)
-        caption = random.choice([
-            "Я такая горячая... Хочешь меня трахнуть? 😈",
-            "Мои ноги дрожат от желания... Ты готов меня взять? 🔥",
-            "Я уже вся мокрая... Хочешь увидеть больше? 💋"
-        ])
-        user_history[user_id].append({"role": "assistant", "content": f"[Отправила голое фото]: {caption}"})
-        try:
-            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption=caption)
-            logger.info("✅ Авто-фото отправлено на 7-м сообщении")
-        except Exception as e:
-            logger.error(f"❌ Ошибка отправки авто-фото: {e}")
-        return
-
-    user_history[user_id].append({"role": "user", "content": message.text})
-    user_history[user_id] = user_history[user_id][-10:]
-
     try:
-        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}] + user_history[user_id]
+        full_messages = [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": message.text}]
         reply = await generate_luna_reply(full_messages)
-        user_history[user_id].append({"role": "assistant", "content": reply})
         await bot.reply_to(message, reply)
     except Exception as e:
         logger.error(f"Ошибка: {e}")
