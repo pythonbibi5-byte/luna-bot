@@ -1,3 +1,5 @@
 pyTelegramBotAPI
 openai
 tenacity
+flask
+requests
