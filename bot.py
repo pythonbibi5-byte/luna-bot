@@ -440,16 +440,8 @@ async def handle_successful_payment(message):
     logger.info(f"💰 Платёж подтверждён: {user_id}")
 
 # ============================================================
-# 17. ОБРАБОТЧИКИ
+# 17. ОБРАБОТЧИК /PHOTO
 # ============================================================
-@bot.message_handler(commands=['clear'])
-async def handle_clear(message):
-    user_id = message.from_user.id
-    if clear_history(user_id):
-        await bot.reply_to(message, "🧹 История очищена. 😈")
-    else:
-        await bot.reply_to(message, "❌ История пуста.")
-
 @bot.message_handler(commands=['photo'])
 async def handle_photo(message):
     user_id = message.from_user.id
@@ -471,37 +463,9 @@ async def handle_photo(message):
     else:
         await bot.reply_to(message, "❌ Не удалось сгенерировать фото.")
 
-@bot.message_handler(func=lambda message: message.text is not None and ("скинь" in message.text.lower() or "покажи" in message.text.lower() or "фото" in message.text.lower()))
-async def auto_photo(message):
-    try:
-        user_id = message.from_user.id
-        if not use_photo(user_id):
-            time_left = get_time_until_photo_refill(user_id)
-            await bot.reply_to(message, f"🔥 Фото закончились! Попробуй через {time_left}.\nИли купи подписку /buy")
-            return
-
-        user_text = message.text.lower()
-        if any(w in user_text for w in ["киск", "пис"]):
-            style = "explicit nude, close-up of pussy, legs spread, detailed genitals, intimate, nsfw, realistic"
-        elif any(w in user_text for w in ["поп", "жоп"]):
-            style = "nude from behind, round ass, bent over, detailed, nsfw, realistic"
-        elif any(w in user_text for w in ["груд", "сись"]):
-            style = "nude, large natural breasts, detailed nipples, sensual, nsfw, realistic"
-        else:
-            style = "full body nude, sensual pose, beautiful body, nsfw, realistic"
-
-        await bot.reply_to(message, "📸 Держи...")
-        base = "Luna, 20 years old, long dark chestnut hair, green-hazel eyes, pale smooth skin, large natural breasts, narrow waist, wide hips"
-        prompt = f"{base}, {style}, photorealistic, 8k, highly detailed"
-        image_url = await generate_image(prompt)
-        if image_url:
-            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
-        else:
-            await bot.reply_to(message, "❌ Не удалось сгенерировать фото.")
-    except Exception as e:
-        logger.error(f"Ошибка авто-фото: {e}")
-        await bot.reply_to(message, "❌ Ошибка! Попробуй ещё раз.")
-
+# ============================================================
+# 18. ОБРАБОТЧИК GIF — ПЕРВЫЙ (ПРИОРИТЕТ)
+# ============================================================
 @bot.message_handler(func=lambda m: m.text and any(w in m.text.lower() for w in ["видео", "гиф", "gif", "анимац"]))
 async def handle_gif(message):
     try:
@@ -540,7 +504,57 @@ async def handle_gif(message):
         await bot.reply_to(message, "❌ Ошибка! Попробуй позже.")
 
 # ============================================================
-# 18. ГЕНЕРАЦИЯ ОТВЕТА
+# 19. ОБРАБОТЧИК АВТО-ФОТО — ВТОРОЙ (ИСКЛЮЧАЕТ ВИДЕО/ГИФ)
+# ============================================================
+@bot.message_handler(func=lambda message: message.text is not None and (
+    ("скинь" in message.text.lower() or 
+     "покажи" in message.text.lower() or 
+     "фото" in message.text.lower())
+    and not any(w in message.text.lower() for w in ["видео", "гиф", "gif", "анимац"])
+))
+async def auto_photo(message):
+    try:
+        user_id = message.from_user.id
+        if not use_photo(user_id):
+            time_left = get_time_until_photo_refill(user_id)
+            await bot.reply_to(message, f"🔥 Фото закончились! Попробуй через {time_left}.\nИли купи подписку /buy")
+            return
+
+        user_text = message.text.lower()
+        if any(w in user_text for w in ["киск", "пис"]):
+            style = "explicit nude, close-up of pussy, legs spread, detailed genitals, intimate, nsfw, realistic"
+        elif any(w in user_text for w in ["поп", "жоп"]):
+            style = "nude from behind, round ass, bent over, detailed, nsfw, realistic"
+        elif any(w in user_text for w in ["груд", "сись"]):
+            style = "nude, large natural breasts, detailed nipples, sensual, nsfw, realistic"
+        else:
+            style = "full body nude, sensual pose, beautiful body, nsfw, realistic"
+
+        await bot.reply_to(message, "📸 Держи...")
+        base = "Luna, 20 years old, long dark chestnut hair, green-hazel eyes, pale smooth skin, large natural breasts, narrow waist, wide hips"
+        prompt = f"{base}, {style}, photorealistic, 8k, highly detailed"
+        image_url = await generate_image(prompt)
+        if image_url:
+            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
+        else:
+            await bot.reply_to(message, "❌ Не удалось сгенерировать фото.")
+    except Exception as e:
+        logger.error(f"Ошибка авто-фото: {e}")
+        await bot.reply_to(message, "❌ Ошибка! Попробуй ещё раз.")
+
+# ============================================================
+# 20. ОБРАБОТЧИК /CLEAR
+# ============================================================
+@bot.message_handler(commands=['clear'])
+async def handle_clear(message):
+    user_id = message.from_user.id
+    if clear_history(user_id):
+        await bot.reply_to(message, "🧹 История очищена. 😈")
+    else:
+        await bot.reply_to(message, "❌ История пуста.")
+
+# ============================================================
+# 21. ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
 async def generate_luna_reply(messages: list) -> str:
     for provider in MODEL_CHAIN:
@@ -566,7 +580,7 @@ async def generate_luna_reply(messages: list) -> str:
     ])
 
 # ============================================================
-# 19. ОСНОВНОЙ ОБРАБОТЧИК
+# 22. ОСНОВНЫЙ ОБРАБОТЧИК
 # ============================================================
 user_last_message = {}
 
@@ -588,6 +602,8 @@ async def handle_message(message):
         return
     if "скинь" in user_text.lower() or "покажи" in user_text.lower() or "фото" in user_text.lower():
         return
+    if any(w in user_text.lower() for w in ["видео", "гиф", "gif", "анимац"]):
+        return
 
     if not use_message(user_id):
         time_left = get_time_until_msg_refill(user_id)
@@ -607,7 +623,7 @@ async def handle_message(message):
         await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
 
 # ============================================================
-# 20. ЗАПУСК
+# 23. ЗАПУСК
 # ============================================================
 async def main():
     logger.info("🚀 Запуск веб-сервера...")
