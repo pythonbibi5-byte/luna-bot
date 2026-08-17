@@ -390,7 +390,7 @@ async def download_frame(
 
             image = image.resize(
                 (384, 576),
-                Image.Resampling.LANCZOS,
+                Image.LANCZOS,
             )
 
             return image
@@ -758,7 +758,7 @@ async def send_stars_invoice(
             title=selected_plan["title"],
             description=selected_plan["description"],
             invoice_payload=selected_plan["payload"],
-            provider_token=None,
+            provider_token="",
             currency="XTR",
             prices=[
                 LabeledPrice(
@@ -770,14 +770,10 @@ async def send_stars_invoice(
         )
 
     except Exception as error:
-        logger.exception(
-            "Invoice error: %s",
-            error,
-        )
-
+        logger.exception("send_stars_invoice error: %s", error)
         await bot.send_message(
             user_id,
-            "Не удалось создать счёт.",
+            "Не удалось выставить счёт, попробуй позже.",
         )
 
 @bot.message_handler(commands=["start"])
@@ -954,22 +950,18 @@ async def handle_photo(message):
         )
 
 # ============================================================
-# 17. GIF / ВИДЕО
+# 17. GIF / ВИДЕО (ИСПРАВЛЕНО)
 # ============================================================
 
 @bot.message_handler(
+    content_types=["text"],
     func=lambda message: bool(
         message.text
         and any(
             word in message.text.lower()
-            for word in [
-                "видео",
-                "гиф",
-                "gif",
-                "анимац",
-            ]
+            for word in ["видео", "гиф", "gif", "анимац"]
         )
-    )
+    ),
 )
 async def handle_gif(message):
     user_id = message.from_user.id
@@ -990,17 +982,12 @@ async def handle_gif(message):
         )
         return
 
-    await bot.reply_to(
-        message,
-        "Делаю мини-видео...",
-    )
+    await bot.reply_to(message, "Делаю мини-видео...")
 
     style = get_style_from_text(message.text)
 
     if style.startswith("full body"):
-        style = get_style_by_stage(
-            get_msg_count(user_id)
-        )
+        style = get_style_by_stage(get_msg_count(user_id))
 
     prompt_base = f"{LUNA_BASE}, {style}"
     gif_data = await generate_gif(prompt_base)
@@ -1013,18 +1000,17 @@ async def handle_gif(message):
         return
 
     try:
+        gif_data.seek(0)
+        gif_data.name = "luna.gif"
+
         await bot.send_animation(
-            message.chat.id,
-            animation=InputFile(gif_data),
+            chat_id=message.chat.id,
+            animation=gif_data,
             caption="Мини-видео для тебя.",
         )
 
     except Exception as error:
-        logger.exception(
-            "Send GIF error: %s",
-            error,
-        )
-
+        logger.exception("Send GIF error: %s", error)
         await bot.reply_to(
             message,
             "Не смогла отправить GIF. Попробуй обычное фото.",
@@ -1035,6 +1021,7 @@ async def handle_gif(message):
 # ============================================================
 
 @bot.message_handler(
+    content_types=["text"],
     func=lambda message: bool(
         message.text
         and (
@@ -1127,13 +1114,13 @@ async def generate_luna_reply(messages: list) -> str:
     )
 
 # ============================================================
-# 20. ОСНОВНОЙ ЧАТ
+# 20. ОСНОВНОЙ ЧАТ (ИСПРАВЛЕНО)
 # ============================================================
 
 user_last_message = {}
 user_message_lock = Lock()
 
-@bot.message_handler(func=lambda message: True)
+@bot.message_handler(content_types=["text"], func=lambda message: True)
 async def handle_message(message):
     if not message.text:
         return
@@ -1172,10 +1159,7 @@ async def handle_message(message):
         "анимац",
     ]
 
-    if any(
-        word in lowered_text
-        for word in media_words
-    ):
+    if any(word in lowered_text for word in media_words):
         return
 
     if not use_message(user_id):
@@ -1187,34 +1171,19 @@ async def handle_message(message):
         )
         return
 
-    add_to_history(
-        user_id,
-        "user",
-        user_text,
-    )
-
+    add_to_history(user_id, "user", user_text)
     history = get_user_history(user_id)
 
     messages = [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT,
-        }
+        {"role": "system", "content": SYSTEM_PROMPT},
     ] + history
 
     try:
         reply = await generate_luna_reply(messages)
 
-        add_to_history(
-            user_id,
-            "assistant",
-            reply,
-        )
+        add_to_history(user_id, "assistant", reply)
 
-        await bot.reply_to(
-            message,
-            reply,
-        )
+        await bot.reply_to(message, reply)
 
         message_count = get_msg_count(user_id)
 
@@ -1243,11 +1212,7 @@ async def handle_message(message):
             )
 
     except Exception as error:
-        logger.exception(
-            "Main handler error: %s",
-            error,
-        )
-
+        logger.exception("Main handler error: %s", error)
         await bot.reply_to(
             message,
             "Что-то пошло не так… напиши ещё раз.",
