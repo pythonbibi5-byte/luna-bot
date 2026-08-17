@@ -252,14 +252,95 @@ async def handle_admin(message):
         await bot.reply_to(message, "❌ Неверный ключ доступа. Доступ запрещён.")
 
 # ============================================================
-# 12. КОМАНДЫ
+# 12. КОМАНДА /START С DEEP-LINK
 # ============================================================
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
     user_id = message.from_user.id
+    text = (message.text or "").strip().lower()
+
+    # Deep-link с сайта оплаты
+    if "buy_plus" in text:
+        await send_stars_invoice(user_id, "plus")
+        return
+    if "buy_vip" in text:
+        await send_stars_invoice(user_id, "vip")
+        return
+
+    # Обычный старт
     clear_history(user_id)
     await bot.reply_to(message, "🌙 Привет, детка! Я — Луна. Напиши мне что-нибудь. 😈")
 
+# ============================================================
+# 13. ОТПРАВКА СЧЁТА (STARS)
+# ============================================================
+async def send_stars_invoice(user_id: int, plan: str = "plus"):
+    if plan == "vip":
+        title = "Luna VIP"
+        description = "Всё из Plus + личный менеджер, видео-звонки"
+        price = 1500
+        payload = "luna_vip"
+    else:
+        title = "Luna Plus"
+        description = "Безлимитные сообщения и фото + приоритетный ответ"
+        price = 500
+        payload = "luna_plus"
+
+    prices = [LabeledPrice(label=title, amount=price)]
+
+    try:
+        await bot.send_invoice(
+            chat_id=user_id,
+            title=title,
+            description=description,
+            invoice_payload=payload,
+            provider_token="",
+            currency="XTR",
+            prices=prices,
+            start_parameter="luna_subscription"
+        )
+        logger.info(f"💰 Счёт отправлен {user_id}: {title} ({price} Stars)")
+    except Exception as e:
+        logger.error(f"❌ Ошибка отправки счёта: {e}")
+        await bot.send_message(user_id, "❌ Не удалось создать счёт. Попробуй позже.")
+
+# ============================================================
+# 14. КОМАНДА /BUY
+# ============================================================
+@bot.message_handler(commands=['buy'])
+async def handle_buy(message):
+    user_id = message.from_user.id
+    text = (message.text or "").replace('/buy', '').strip().lower()
+
+    plan = "vip" if "vip" in text else "plus"
+    await send_stars_invoice(user_id, plan)
+
+# ============================================================
+# 15. ПРОВЕРКА ПЛАТЕЖА
+# ============================================================
+@bot.pre_checkout_query_handler(func=lambda query: True)
+async def handle_pre_checkout(query):
+    await bot.answer_pre_checkout_query(query.id, ok=True)
+
+@bot.message_handler(content_types=['successful_payment'])
+async def handle_successful_payment(message):
+    user_id = message.from_user.id
+    data = get_limit_data(user_id)
+    data["vip"] = True
+    await bot.reply_to(
+        message,
+        "🎉 Поздравляю! Подписка активирована!\n\n"
+        "Теперь у тебя:\n"
+        "✅ Безлимитные сообщения\n"
+        "✅ Безлимитные фото\n"
+        "✅ Приоритетный ответ\n"
+        "Наслаждайся, детка. 😈🔥"
+    )
+    logger.info(f"💰 Платёж подтверждён: {user_id}")
+
+# ============================================================
+# 16. КОМАНДЫ /PHOTO, /CLEAR
+# ============================================================
 @bot.message_handler(commands=['clear'])
 async def handle_clear(message):
     user_id = message.from_user.id
@@ -322,64 +403,7 @@ async def auto_photo(message):
         await bot.reply_to(message, "❌ Не удалось отправить фото.")
 
 # ============================================================
-# 13. ОПЛАТА (TELEGRAM STARS)
-# ============================================================
-@bot.message_handler(commands=['buy'])
-async def handle_buy(message):
-    user_id = message.from_user.id
-    text = (message.text or "").replace('/buy', '').strip()
-
-    if 'vip' in text.lower():
-        title = "Luna VIP"
-        description = "Всё из Plus + личный менеджер, видео-звонки"
-        price = 1500
-        payload = "luna_vip"
-    else:
-        title = "Luna Plus"
-        description = "Безлимитные сообщения и фото + приоритетный ответ"
-        price = 500
-        payload = "luna_plus"
-
-    prices = [LabeledPrice(label=title, amount=price)]
-
-    try:
-        await bot.send_invoice(
-            chat_id=user_id,
-            title=title,
-            description=description,
-            invoice_payload=payload,
-            provider_token="",
-            currency="XTR",
-            prices=prices,
-            start_parameter="luna_subscription"
-        )
-        logger.info(f"💰 Счёт отправлен {user_id}: {title} ({price} Stars)")
-    except Exception as e:
-        logger.error(f"❌ Ошибка отправки счёта: {e}")
-        await bot.reply_to(message, f"❌ Не удалось создать счёт. Попробуй позже.")
-
-@bot.pre_checkout_query_handler(func=lambda query: True)
-async def handle_pre_checkout(query):
-    await bot.answer_pre_checkout_query(query.id, ok=True)
-
-@bot.message_handler(content_types=['successful_payment'])
-async def handle_successful_payment(message):
-    user_id = message.from_user.id
-    data = get_limit_data(user_id)
-    data["vip"] = True
-    await bot.reply_to(
-        message,
-        "🎉 Поздравляю! Подписка активирована!\n\n"
-        "Теперь у тебя:\n"
-        "✅ Безлимитные сообщения\n"
-        "✅ Безлимитные фото\n"
-        "✅ Приоритетный ответ\n"
-        "Наслаждайся, детка. 😈🔥"
-    )
-    logger.info(f"💰 Платёж подтверждён: {user_id}")
-
-# ============================================================
-# 14. ГЕНЕРАЦИЯ ОТВЕТА
+# 17. ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
 async def generate_luna_reply(messages: list) -> str:
     for provider in MODEL_CHAIN:
@@ -405,7 +429,7 @@ async def generate_luna_reply(messages: list) -> str:
     ])
 
 # ============================================================
-# 15. ОСНОВНОЙ ОБРАБОТЧИК
+# 18. ОСНОВНЫЙ ОБРАБОТЧИК
 # ============================================================
 user_last_message = {}
 
@@ -451,7 +475,7 @@ async def handle_message(message):
         await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
 
 # ============================================================
-# 16. ЗАПУСК
+# 19. ЗАПУСК
 # ============================================================
 async def main():
     logger.info("🚀 Запуск веб-сервера...")
