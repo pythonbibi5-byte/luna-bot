@@ -5,6 +5,8 @@ import random
 import urllib.parse
 import hashlib
 import time
+import tempfile
+from io import BytesIO
 from threading import Thread
 from flask import Flask
 from telebot.async_telebot import AsyncTeleBot
@@ -115,7 +117,7 @@ SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 ЛЕТ.
 Ты сейчас лежишь в кровати, настроение хорошее. Ты хочешь поговорить. Ты ждёшь, когда он разогреет тебя."""
 
 # ============================================================
-# 7. ГЕНЕРАЦИЯ ПРОМПТА ДЛЯ ФОТО (УЛУЧШЕННАЯ)
+# 7. ГЕНЕРАЦИЯ ПРОМПТА
 # ============================================================
 async def generate_image_prompt(user_request: str) -> str:
     try:
@@ -142,11 +144,10 @@ async def generate_image_prompt(user_request: str) -> str:
         return "photorealistic portrait of Luna, 20yo beautiful girl, sensual, soft lighting, 8k"
 
 # ============================================================
-# 8. ГЕНЕРАЦИЯ ФОТО (С FIX ОТ GROK)
+# 8. ГЕНЕРАЦИЯ ФОТО
 # ============================================================
 async def generate_image(prompt: str) -> str:
     seed = random.randint(1, 9999999)
-    
     variations = [
         "cinematic lighting, highly detailed skin, 8k",
         "soft ambient light, realistic skin texture, detailed",
@@ -155,19 +156,71 @@ async def generate_image(prompt: str) -> str:
         "moody atmosphere, sharp focus, realistic"
     ]
     variation = random.choice(variations)
-    
     full_prompt = f"{prompt}, {variation}, photorealistic, high quality"
     encoded = urllib.parse.quote(full_prompt[:1200])
-    
-    url = (
-        f"https://image.pollinations.ai/prompt/{encoded}"
-        f"?width=768&height=1024&nologo=true&enhance=true&model=flux&seed={seed}&safe=false"
-    )
+    url = f"https://image.pollinations.ai/prompt/{encoded}?width=768&height=1024&nologo=true&enhance=true&model=flux&seed={seed}&safe=false"
     logger.info(f"📸 Фото seed={seed}")
     return url
 
 # ============================================================
-# 9. ПАМЯТЬ
+# 9. ГЕНЕРАЦИЯ GIF (8 КАДРОВ)
+# ============================================================
+try:
+    from PIL import Image
+    import aiohttp
+    GIF_AVAILABLE = True
+except ImportError:
+    GIF_AVAILABLE = False
+    logger.warning("Pillow или aiohttp не установлены — GIF недоступен")
+
+async def generate_gif(prompt_base: str):
+    if not GIF_AVAILABLE:
+        return None
+
+    frames = []
+    variations = [
+        "slow subtle movement, soft lighting",
+        "warm intimate glow, slight pose shift",
+        "cinematic, gentle motion",
+        "dreamy, romantic atmosphere",
+        "sharp focus, detailed skin",
+        "moody artistic light",
+        "sensual elegant pose",
+        "passionate intense look"
+    ]
+
+    async with aiohttp.ClientSession() as session:
+        for i in range(8):
+            try:
+                seed = random.randint(1, 9999999)
+                prompt = f"{prompt_base}, {variations[i]}, photorealistic, 8k, highly detailed, nsfw"
+                encoded = urllib.parse.quote(prompt[:1100])
+                url = f"https://image.pollinations.ai/prompt/{encoded}?width=512&height=768&nologo=true&enhance=true&model=flux&seed={seed}&safe=false"
+
+                async with session.get(url, timeout=aiohttp.ClientTimeout(total=45)) as resp:
+                    if resp.status == 200:
+                        data = await resp.read()
+                        img = Image.open(BytesIO(data)).convert("RGB")
+                        img = img.resize((384, 576), Image.Resampling.LANCZOS)
+                        frames.append(img)
+                        logger.info(f"📸 Кадр {i+1}/8 готов")
+                    else:
+                        logger.warning(f"Кадр {i+1} не скачался: {resp.status}")
+            except Exception as e:
+                logger.error(f"Ошибка кадра {i+1}: {e}")
+
+    if len(frames) < 4:
+        logger.error("Слишком мало кадров для GIF")
+        return None
+
+    gif_buffer = BytesIO()
+    frames[0].save(gif_buffer, format="GIF", save_all=True, append_images=frames[1:], duration=350, loop=0, optimize=True)
+    gif_buffer.seek(0)
+    logger.info(f"🎬 GIF готов, кадров: {len(frames)}")
+    return gif_buffer
+
+# ============================================================
+# 10. ПАМЯТЬ
 # ============================================================
 MAX_HISTORY = 40
 user_history = {}
@@ -189,69 +242,111 @@ def clear_history(user_id: int):
     return False
 
 # ============================================================
-# 10. ЛИМИТЫ
+# 11. ЛИМИТЫ
 # ============================================================
-MAX_MESSAGES = 7
-REFILL_INTERVAL = timedelta(hours=3)
-HOURS_TO_REFILL = 3
-MESSAGES_PER_HOUR = MAX_MESSAGES / HOURS_TO_REFILL
+MAX_MESSAGES = 9
+MSG_REFILL_INTERVAL = timedelta(minutes=25)
+
+MAX_PHOTOS = 3
+PHOTO_REFILL_INTERVAL = timedelta(minutes=45)
 
 user_limit_data = {}
 
 def get_limit_data(user_id: int) -> dict:
     if user_id not in user_limit_data:
-        user_limit_data[user_id] = {"count": MAX_MESSAGES, "last_refill": datetime.now(), "vip": False}
+        user_limit_data[user_id] = {
+            "msg_count": MAX_MESSAGES,
+            "msg_last_refill": datetime.now(),
+            "photo_count": MAX_PHOTOS,
+            "photo_last_refill": datetime.now(),
+            "vip": False
+        }
     return user_limit_data[user_id]
 
 def get_available_messages(user_id: int) -> int:
     data = get_limit_data(user_id)
     if data["vip"]:
         return 999
-    
+
     now = datetime.now()
-    time_passed = now - data["last_refill"]
-    
-    if time_passed >= REFILL_INTERVAL:
-        data["count"] = MAX_MESSAGES
-        data["last_refill"] = now
-        return data["count"]
-    
-    hours_passed = time_passed.total_seconds() / 3600
-    added_messages = int(hours_passed * MESSAGES_PER_HOUR)
-    
-    if added_messages > 0:
-        data["count"] = min(data["count"] + added_messages, MAX_MESSAGES)
-        data["last_refill"] = data["last_refill"] + timedelta(hours=added_messages / MESSAGES_PER_HOUR)
-    
-    return data["count"]
+    time_passed = now - data["msg_last_refill"]
+
+    if time_passed >= MSG_REFILL_INTERVAL:
+        data["msg_count"] = MAX_MESSAGES
+        data["msg_last_refill"] = now
+        return data["msg_count"]
+
+    minutes_passed = time_passed.total_seconds() / 60
+    added = int(minutes_passed / (25 / MAX_MESSAGES))
+    if added > 0:
+        data["msg_count"] = min(data["msg_count"] + added, MAX_MESSAGES)
+        data["msg_last_refill"] = data["msg_last_refill"] + timedelta(minutes=added * (25 / MAX_MESSAGES))
+
+    return data["msg_count"]
 
 def use_message(user_id: int) -> bool:
     data = get_limit_data(user_id)
     if data["vip"]:
         return True
-    
+
     available = get_available_messages(user_id)
     if available > 0:
-        data["count"] = available - 1
+        data["msg_count"] = available - 1
         return True
     return False
 
-def get_time_until_refill(user_id: int) -> str:
+def get_available_photos(user_id: int) -> int:
+    data = get_limit_data(user_id)
+    if data["vip"]:
+        return 999
+
+    now = datetime.now()
+    time_passed = now - data["photo_last_refill"]
+
+    if time_passed >= PHOTO_REFILL_INTERVAL:
+        data["photo_count"] = MAX_PHOTOS
+        data["photo_last_refill"] = now
+        return data["photo_count"]
+
+    minutes_passed = time_passed.total_seconds() / 60
+    added = int(minutes_passed / (45 / MAX_PHOTOS))
+    if added > 0:
+        data["photo_count"] = min(data["photo_count"] + added, MAX_PHOTOS)
+        data["photo_last_refill"] = data["photo_last_refill"] + timedelta(minutes=added * (45 / MAX_PHOTOS))
+
+    return data["photo_count"]
+
+def use_photo(user_id: int) -> bool:
+    data = get_limit_data(user_id)
+    if data["vip"]:
+        return True
+
+    available = get_available_photos(user_id)
+    if available > 0:
+        data["photo_count"] = available - 1
+        return True
+    return False
+
+def get_time_until_msg_refill(user_id: int) -> str:
     data = get_limit_data(user_id)
     now = datetime.now()
-    time_passed = now - data["last_refill"]
-    remaining = REFILL_INTERVAL - time_passed
+    remaining = MSG_REFILL_INTERVAL - (now - data["msg_last_refill"])
     if remaining.total_seconds() <= 0:
         return "0 мин"
-    
-    hours = int(remaining.total_seconds() // 3600)
-    minutes = int((remaining.total_seconds() % 3600) // 60)
-    if hours > 0:
-        return f"{hours} ч {minutes} мин"
+    minutes = int(remaining.total_seconds() // 60)
+    return f"{minutes} мин"
+
+def get_time_until_photo_refill(user_id: int) -> str:
+    data = get_limit_data(user_id)
+    now = datetime.now()
+    remaining = PHOTO_REFILL_INTERVAL - (now - data["photo_last_refill"])
+    if remaining.total_seconds() <= 0:
+        return "0 мин"
+    minutes = int(remaining.total_seconds() // 60)
     return f"{minutes} мин"
 
 # ============================================================
-# 11. АДМИН-КОМАНДА
+# 12. АДМИН-КОМАНДА
 # ============================================================
 ADMIN_HASH = hashlib.sha256(b"luna_supreme_777").hexdigest()
 
@@ -263,13 +358,13 @@ async def handle_admin(message):
     if hashlib.sha256(text.encode()).hexdigest() == ADMIN_HASH:
         data = get_limit_data(user_id)
         data["vip"] = True
-        await bot.reply_to(message, "✅ Ты активировал режим БОГА! Луна теперь безлимитно твоя. 😈🔥")
+        await bot.reply_to(message, "✅ Ты активировал режим БОГА! 😈🔥")
         logger.info(f"🔥 Админ-режим активирован для {user_id}")
     else:
-        await bot.reply_to(message, "❌ Неверный ключ доступа. Доступ запрещён.")
+        await bot.reply_to(message, "❌ Неверный ключ доступа.")
 
 # ============================================================
-# 12. КОМАНДА /START С DEEP-LINK
+# 13. КОМАНДА /START
 # ============================================================
 @bot.message_handler(commands=['start'])
 async def handle_start(message):
@@ -287,23 +382,23 @@ async def handle_start(message):
     await bot.reply_to(message, "🌙 Привет, детка! Я — Луна. Напиши мне что-нибудь. 😈")
 
 # ============================================================
-# 13. ОТПРАВКА СЧЁТА (STARS)
+# 14. ОТПРАВКА СЧЁТА
 # ============================================================
 async def send_stars_invoice(user_id: int, plan: str = "plus"):
-    if plan == "vip":
-        title = "Luna VIP"
-        description = "Всё из Plus + личный менеджер, видео-звонки"
-        price = 1500
-        payload = "luna_vip"
-    else:
-        title = "Luna Plus"
-        description = "Безлимитные сообщения и фото + приоритетный ответ"
-        price = 500
-        payload = "luna_plus"
-
-    prices = [LabeledPrice(label=title, amount=price)]
-
     try:
+        if plan == "vip":
+            title = "Luna VIP"
+            description = "Всё из Plus + личный менеджер, видео-звонки"
+            price = 1500
+            payload = "luna_vip"
+        else:
+            title = "Luna Plus"
+            description = "Безлимитные сообщения и фото + приоритетный ответ"
+            price = 500
+            payload = "luna_plus"
+
+        prices = [LabeledPrice(label=title, amount=price)]
+
         await bot.send_invoice(
             chat_id=user_id,
             title=title,
@@ -320,18 +415,17 @@ async def send_stars_invoice(user_id: int, plan: str = "plus"):
         await bot.send_message(user_id, "❌ Не удалось создать счёт. Попробуй позже.")
 
 # ============================================================
-# 14. КОМАНДА /BUY
+# 15. КОМАНДА /BUY
 # ============================================================
 @bot.message_handler(commands=['buy'])
 async def handle_buy(message):
     user_id = message.from_user.id
     text = (message.text or "").replace('/buy', '').strip().lower()
-
     plan = "vip" if "vip" in text else "plus"
     await send_stars_invoice(user_id, plan)
 
 # ============================================================
-# 15. ПРОВЕРКА ПЛАТЕЖА
+# 16. ОПЛАТА
 # ============================================================
 @bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(query):
@@ -342,19 +436,11 @@ async def handle_successful_payment(message):
     user_id = message.from_user.id
     data = get_limit_data(user_id)
     data["vip"] = True
-    await bot.reply_to(
-        message,
-        "🎉 Поздравляю! Подписка активирована!\n\n"
-        "Теперь у тебя:\n"
-        "✅ Безлимитные сообщения\n"
-        "✅ Безлимитные фото\n"
-        "✅ Приоритетный ответ\n"
-        "Наслаждайся, детка. 😈🔥"
-    )
+    await bot.reply_to(message, "🎉 Подписка активирована! Безлимит активирован. 😈🔥")
     logger.info(f"💰 Платёж подтверждён: {user_id}")
 
 # ============================================================
-# 16. КОМАНДЫ /PHOTO, /CLEAR
+# 17. ОБРАБОТЧИКИ
 # ============================================================
 @bot.message_handler(commands=['clear'])
 async def handle_clear(message):
@@ -367,72 +453,91 @@ async def handle_clear(message):
 @bot.message_handler(commands=['photo'])
 async def handle_photo(message):
     user_id = message.from_user.id
-    if not use_message(user_id):
-        time_left = get_time_until_refill(user_id)
-        await bot.reply_to(
-            message,
-            f"🔥 Луна перегружена! Попробуй через {time_left}.\nИли купи подписку /buy"
-        )
+    if not use_photo(user_id):
+        time_left = get_time_until_photo_refill(user_id)
+        await bot.reply_to(message, f"🔥 Фото закончились! Попробуй через {time_left}.\nИли купи подписку /buy")
         return
     
     text = (message.text or "").replace('/photo', '').strip() or "Luna, sensual, intimate"
     await bot.reply_to(message, "📸 Делаю фото...")
     prompt = await generate_image_prompt(text)
     image_url = await generate_image(prompt)
-    try:
-        await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Твоя Луна. 💋")
-    except Exception as e:
-        logger.error(f"Ошибка фото: {e}")
-        await bot.reply_to(message, "❌ Не удалось отправить фото.")
-
-# ============================================================
-# 17. АВТО-ФОТО (УЛУЧШЕННОЕ ОТ GROK)
-# ============================================================
-@bot.message_handler(func=lambda message: message.text is not None and (
-    "скинь" in message.text.lower() or 
-    "покажи" in message.text.lower() or 
-    "фото" in message.text.lower()
-))
-async def auto_photo(message):
-    user_id = message.from_user.id
-    if not use_message(user_id):
-        time_left = get_time_until_refill(user_id)
-        await bot.reply_to(
-            message,
-            f"🔥 Луна перегружена! Попробуй через {time_left}.\nИли купи подписку /buy"
-        )
-        return
-
-    user_text = message.text.lower()
-    
-    # Более точные стили под запрос
-    if any(w in user_text for w in ["киск", "пис", "вагин", "дырк"]):
-        style = "explicit nude, close-up of pussy, legs spread, detailed genitals, intimate, nsfw, realistic"
-    elif any(w in user_text for w in ["поп", "жоп", "задниц"]):
-        style = "nude from behind, round ass, bent over, detailed, nsfw, realistic"
-    elif any(w in user_text for w in ["груд", "сись", "тить"]):
-        style = "nude, large natural breasts, detailed nipples, sensual, nsfw, realistic"
-    elif any(w in user_text for w in ["лиц", "портрет", "глаз"]):
-        style = "beautiful face portrait, green-hazel eyes, long dark chestnut hair, soft lighting"
+    if image_url:
+        try:
+            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Твоя Луна. 💋")
+        except Exception as e:
+            logger.error(f"Ошибка отправки фото: {e}")
+            await bot.reply_to(message, "❌ Не удалось отправить фото.")
     else:
-        style = "full body nude, sensual pose, beautiful body, nsfw, realistic"
+        await bot.reply_to(message, "❌ Не удалось сгенерировать фото.")
 
-    await bot.reply_to(message, "📸 Держи...")
-    
-    base = "Luna, 20 years old, long dark chestnut hair, green-hazel eyes, pale smooth skin, large natural breasts, narrow waist, wide hips"
-    prompt = f"{base}, {style}, photorealistic, 8k, highly detailed"
-    
-    image_url = await generate_image(prompt)
-    
+@bot.message_handler(func=lambda message: message.text is not None and ("скинь" in message.text.lower() or "покажи" in message.text.lower() or "фото" in message.text.lower()))
+async def auto_photo(message):
     try:
-        await bot.send_photo(
-            chat_id=message.chat.id, 
-            photo=image_url, 
-            caption="🔥 Специально для тебя. 💋"
-        )
+        user_id = message.from_user.id
+        if not use_photo(user_id):
+            time_left = get_time_until_photo_refill(user_id)
+            await bot.reply_to(message, f"🔥 Фото закончились! Попробуй через {time_left}.\nИли купи подписку /buy")
+            return
+
+        user_text = message.text.lower()
+        if any(w in user_text for w in ["киск", "пис"]):
+            style = "explicit nude, close-up of pussy, legs spread, detailed genitals, intimate, nsfw, realistic"
+        elif any(w in user_text for w in ["поп", "жоп"]):
+            style = "nude from behind, round ass, bent over, detailed, nsfw, realistic"
+        elif any(w in user_text for w in ["груд", "сись"]):
+            style = "nude, large natural breasts, detailed nipples, sensual, nsfw, realistic"
+        else:
+            style = "full body nude, sensual pose, beautiful body, nsfw, realistic"
+
+        await bot.reply_to(message, "📸 Держи...")
+        base = "Luna, 20 years old, long dark chestnut hair, green-hazel eyes, pale smooth skin, large natural breasts, narrow waist, wide hips"
+        prompt = f"{base}, {style}, photorealistic, 8k, highly detailed"
+        image_url = await generate_image(prompt)
+        if image_url:
+            await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
+        else:
+            await bot.reply_to(message, "❌ Не удалось сгенерировать фото.")
     except Exception as e:
         logger.error(f"Ошибка авто-фото: {e}")
-        await bot.reply_to(message, "❌ Не удалось отправить фото. Попробуй ещё раз.")
+        await bot.reply_to(message, "❌ Ошибка! Попробуй ещё раз.")
+
+@bot.message_handler(func=lambda m: m.text and any(w in m.text.lower() for w in ["видео", "гиф", "gif", "анимац"]))
+async def handle_gif(message):
+    try:
+        user_id = message.from_user.id
+        if not use_photo(user_id):
+            time_left = get_time_until_photo_refill(user_id)
+            await bot.reply_to(message, f"🔥 Лимит! Попробуй через {time_left}.\nИли /buy")
+            return
+
+        await bot.reply_to(message, "🎬 Делаю мини-видео (8 кадров)... Подожди 30–60 сек.")
+
+        user_text = message.text.lower()
+        if any(w in user_text for w in ["киск", "пис"]):
+            style = "explicit nude, close-up pussy, legs spread, nsfw, realistic"
+        elif any(w in user_text for w in ["поп", "жоп"]):
+            style = "nude from behind, round ass, nsfw, realistic"
+        elif any(w in user_text for w in ["груд", "сись"]):
+            style = "nude, large breasts, detailed, nsfw, realistic"
+        else:
+            style = "full body nude, sensual pose, nsfw, realistic"
+
+        base = "Luna, 20yo, long dark chestnut hair, green-hazel eyes, pale skin, large natural breasts, narrow waist, wide hips"
+        prompt_base = f"{base}, {style}"
+
+        gif_data = await generate_gif(prompt_base)
+        if gif_data:
+            try:
+                await bot.send_animation(chat_id=message.chat.id, animation=gif_data, caption="🔥 Мини-видео специально для тебя 💋")
+            except Exception as e:
+                logger.error(f"Ошибка отправки GIF: {e}")
+                await bot.reply_to(message, "❌ Не удалось отправить GIF. Попробуй фото.")
+        else:
+            await bot.reply_to(message, "❌ Не получилось собрать видео. Попробуй фото.")
+    except Exception as e:
+        logger.error(f"Ошибка в GIF: {e}")
+        await bot.reply_to(message, "❌ Ошибка! Попробуй позже.")
 
 # ============================================================
 # 18. ГЕНЕРАЦИЯ ОТВЕТА
@@ -461,7 +566,7 @@ async def generate_luna_reply(messages: list) -> str:
     ])
 
 # ============================================================
-# 19. ОСНОВНЫЙ ОБРАБОТЧИК
+# 19. ОСНОВНОЙ ОБРАБОТЧИК
 # ============================================================
 user_last_message = {}
 
@@ -485,11 +590,8 @@ async def handle_message(message):
         return
 
     if not use_message(user_id):
-        time_left = get_time_until_refill(user_id)
-        await bot.reply_to(
-            message,
-            f"🔥 Луна перегружена! Попробуй через {time_left}.\nИли купи подписку /buy"
-        )
+        time_left = get_time_until_msg_refill(user_id)
+        await bot.reply_to(message, f"🔥 Луна перегружена! Попробуй через {time_left}.\nИли купи подписку /buy")
         return
 
     add_to_history(user_id, "user", user_text)
@@ -515,7 +617,8 @@ async def main():
     logger.info("🚀 Луна успешно запущена!")
     logger.info(f"📊 Моделей: {len(MODEL_CHAIN)}")
     logger.info(f"💾 Память: {MAX_HISTORY} сообщений")
-    logger.info(f"🔒 Лимит: {MAX_MESSAGES} сообщений / {REFILL_INTERVAL}")
+    logger.info(f"🔒 Лимит сообщений: {MAX_MESSAGES} / 25 мин")
+    logger.info(f"📸 Лимит фото: {MAX_PHOTOS} / 45 мин")
     
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.infinity_polling(allowed_updates=["message", "callback_query"])
