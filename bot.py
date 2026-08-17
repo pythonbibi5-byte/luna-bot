@@ -115,7 +115,7 @@ SYSTEM_PROMPT = """ТЫ — ЛУНА. 20 ЛЕТ.
 Ты сейчас лежишь в кровати, настроение хорошее. Ты хочешь поговорить. Ты ждёшь, когда он разогреет тебя."""
 
 # ============================================================
-# 7. ГЕНЕРАЦИЯ ПРОМПТА ДЛЯ ФОТО
+# 7. ГЕНЕРАЦИЯ ПРОМПТА ДЛЯ ФОТО (УЛУЧШЕННАЯ)
 # ============================================================
 async def generate_image_prompt(user_request: str) -> str:
     try:
@@ -142,12 +142,29 @@ async def generate_image_prompt(user_request: str) -> str:
         return "photorealistic portrait of Luna, 20yo beautiful girl, sensual, soft lighting, 8k"
 
 # ============================================================
-# 8. ГЕНЕРАЦИЯ ФОТО
+# 8. ГЕНЕРАЦИЯ ФОТО (С FIX ОТ GROK)
 # ============================================================
 async def generate_image(prompt: str) -> str:
-    seed = random.randint(1, 999999)
-    encoded_prompt = urllib.parse.quote(prompt + ", aesthetic, sensual, elegant")
-    return f"https://image.pollinations.ai/prompt/{encoded_prompt}?seed={seed}&nologo=true&width=512&height=768&enhance=true"
+    seed = random.randint(1, 9999999)
+    
+    variations = [
+        "cinematic lighting, highly detailed skin, 8k",
+        "soft ambient light, realistic skin texture, detailed",
+        "dramatic lighting, photorealistic, masterpiece",
+        "warm intimate lighting, ultra detailed, nsfw",
+        "moody atmosphere, sharp focus, realistic"
+    ]
+    variation = random.choice(variations)
+    
+    full_prompt = f"{prompt}, {variation}, photorealistic, high quality"
+    encoded = urllib.parse.quote(full_prompt[:1200])
+    
+    url = (
+        f"https://image.pollinations.ai/prompt/{encoded}"
+        f"?width=768&height=1024&nologo=true&enhance=true&model=flux&seed={seed}&safe=false"
+    )
+    logger.info(f"📸 Фото seed={seed}")
+    return url
 
 # ============================================================
 # 9. ПАМЯТЬ
@@ -259,7 +276,6 @@ async def handle_start(message):
     user_id = message.from_user.id
     text = (message.text or "").strip().lower()
 
-    # Deep-link с сайта оплаты
     if "buy_plus" in text:
         await send_stars_invoice(user_id, "plus")
         return
@@ -267,7 +283,6 @@ async def handle_start(message):
         await send_stars_invoice(user_id, "vip")
         return
 
-    # Обычный старт
     clear_history(user_id)
     await bot.reply_to(message, "🌙 Привет, детка! Я — Луна. Напиши мне что-нибудь. 😈")
 
@@ -370,7 +385,14 @@ async def handle_photo(message):
         logger.error(f"Ошибка фото: {e}")
         await bot.reply_to(message, "❌ Не удалось отправить фото.")
 
-@bot.message_handler(func=lambda message: message.text is not None and ("скинь" in message.text.lower() or "покажи" in message.text.lower() or "фото" in message.text.lower()))
+# ============================================================
+# 17. АВТО-ФОТО (УЛУЧШЕННОЕ ОТ GROK)
+# ============================================================
+@bot.message_handler(func=lambda message: message.text is not None and (
+    "скинь" in message.text.lower() or 
+    "покажи" in message.text.lower() or 
+    "фото" in message.text.lower()
+))
 async def auto_photo(message):
     user_id = message.from_user.id
     if not use_message(user_id):
@@ -383,27 +405,37 @@ async def auto_photo(message):
 
     user_text = message.text.lower()
     
-    if "киск" in user_text or "пис" in user_text:
-        style = "intimate close-up, sensual, soft lighting"
-    elif "поп" in user_text or "жоп" in user_text:
-        style = "sensual back view, elegant curves"
-    elif "груд" in user_text or "сись" in user_text:
-        style = "sensual portrait, elegant, soft lighting"
+    # Более точные стили под запрос
+    if any(w in user_text for w in ["киск", "пис", "вагин", "дырк"]):
+        style = "explicit nude, close-up of pussy, legs spread, detailed genitals, intimate, nsfw, realistic"
+    elif any(w in user_text for w in ["поп", "жоп", "задниц"]):
+        style = "nude from behind, round ass, bent over, detailed, nsfw, realistic"
+    elif any(w in user_text for w in ["груд", "сись", "тить"]):
+        style = "nude, large natural breasts, detailed nipples, sensual, nsfw, realistic"
+    elif any(w in user_text for w in ["лиц", "портрет", "глаз"]):
+        style = "beautiful face portrait, green-hazel eyes, long dark chestnut hair, soft lighting"
     else:
-        style = "sensual, intimate, aesthetic"
+        style = "full body nude, sensual pose, beautiful body, nsfw, realistic"
 
     await bot.reply_to(message, "📸 Держи...")
-    prompt = await generate_image_prompt(f"Luna, {style}, beautiful, 20yo, dark hair, green-hazel eyes")
+    
+    base = "Luna, 20 years old, long dark chestnut hair, green-hazel eyes, pale smooth skin, large natural breasts, narrow waist, wide hips"
+    prompt = f"{base}, {style}, photorealistic, 8k, highly detailed"
+    
     image_url = await generate_image(prompt)
     
     try:
-        await bot.send_photo(chat_id=message.chat.id, photo=image_url, caption="🔥 Специально для тебя. 💋")
+        await bot.send_photo(
+            chat_id=message.chat.id, 
+            photo=image_url, 
+            caption="🔥 Специально для тебя. 💋"
+        )
     except Exception as e:
         logger.error(f"Ошибка авто-фото: {e}")
-        await bot.reply_to(message, "❌ Не удалось отправить фото.")
+        await bot.reply_to(message, "❌ Не удалось отправить фото. Попробуй ещё раз.")
 
 # ============================================================
-# 17. ГЕНЕРАЦИЯ ОТВЕТА
+# 18. ГЕНЕРАЦИЯ ОТВЕТА
 # ============================================================
 async def generate_luna_reply(messages: list) -> str:
     for provider in MODEL_CHAIN:
@@ -429,7 +461,7 @@ async def generate_luna_reply(messages: list) -> str:
     ])
 
 # ============================================================
-# 18. ОСНОВНЫЙ ОБРАБОТЧИК
+# 19. ОСНОВНЫЙ ОБРАБОТЧИК
 # ============================================================
 user_last_message = {}
 
@@ -441,14 +473,12 @@ async def handle_message(message):
     user_id = message.from_user.id
     user_text = message.text
 
-    # Анти-флуд
     now = time.time()
     if user_id in user_last_message:
         if now - user_last_message[user_id] < 0.5:
             return
     user_last_message[user_id] = now
 
-    # Пропускаем команды и запросы фото
     if user_text.startswith('/'):
         return
     if "скинь" in user_text.lower() or "покажи" in user_text.lower() or "фото" in user_text.lower():
@@ -475,7 +505,7 @@ async def handle_message(message):
         await bot.reply_to(message, "Малыш, что-то пошло не так... Попробуй ещё раз! 😘")
 
 # ============================================================
-# 19. ЗАПУСК
+# 20. ЗАПУСК
 # ============================================================
 async def main():
     logger.info("🚀 Запуск веб-сервера...")
