@@ -3,3 +3,5 @@ openai
 tenacity
 flask
 requests
+aiohttp
+Pillow
