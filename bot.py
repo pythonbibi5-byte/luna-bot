@@ -16,18 +16,17 @@ from telebot.types import LabeledPrice, InputFile
 from openai import AsyncOpenAI
 
 try:
-    import aiohttp
     from PIL import Image, UnidentifiedImageError
+    import aiohttp
 
-    MEDIA_AVAILABLE = True
+    GIF_AVAILABLE = True
 except ImportError:
-    aiohttp = None
+    GIF_AVAILABLE = False
     Image = None
-    UnidentifiedImageError = Exception
-    MEDIA_AVAILABLE = False
+    aiohttp = None
 
 # ============================================================
-# 1. ЛОГИРОВАНИЕ
+# 1. ЛОГГЕР
 # ============================================================
 
 logging.basicConfig(
@@ -46,24 +45,15 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY")
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 
-ADMIN_KEY = os.getenv("LUNA_ADMIN_KEY")
+ADMIN_KEY = os.getenv("LUNA_ADMIN_KEY", "luna_supreme_777")
+ADMIN_HASH = hashlib.sha256(ADMIN_KEY.encode("utf-8")).hexdigest()
 
 if not BOT_TOKEN:
-    logger.error("Не найдена переменная TELEGRAM_BOT_TOKEN")
+    logger.error("TELEGRAM_BOT_TOKEN не найден")
     raise SystemExit(1)
 
-if not ADMIN_KEY:
-    logger.warning(
-        "LUNA_ADMIN_KEY не задан. Админ-команда будет использовать "
-        "временный ключ только если он задан вручную."
-    )
-    ADMIN_KEY = "change_this_admin_key"
-
-ADMIN_HASH = hashlib.sha256(
-    ADMIN_KEY.encode("utf-8")
-).hexdigest()
-
 bot = AsyncTeleBot(BOT_TOKEN)
+
 app = Flask(__name__)
 
 # ============================================================
@@ -74,7 +64,7 @@ def now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 # ============================================================
-# 4. WEB-СЕРВЕР
+# 4. WEB-СЕРВЕР ДЛЯ RENDER
 # ============================================================
 
 @app.route("/")
@@ -87,12 +77,11 @@ def health():
         {
             "status": "ok",
             "timestamp": now_utc().isoformat(),
-            "media_available": MEDIA_AVAILABLE,
         }
     )
 
 def run_web():
-    port = int(os.getenv("PORT", "8080"))
+    port = int(os.environ.get("PORT", "8080"))
 
     app.run(
         host="0.0.0.0",
@@ -105,17 +94,14 @@ def run_web():
 # 5. LLM-КЛИЕНТЫ
 # ============================================================
 
-def create_client(
-    base_url: str,
-    api_key: Optional[str],
-) -> Optional[AsyncOpenAI]:
+def create_client(base_url: str, api_key: Optional[str]) -> Optional[AsyncOpenAI]:
     if not api_key:
         return None
 
     return AsyncOpenAI(
         base_url=base_url,
         api_key=api_key,
-        timeout=30.0,
+        timeout=25.0,
         max_retries=2,
     )
 
@@ -143,7 +129,7 @@ MODEL_CHAIN = [
         "temperature": 0.9,
     },
     {
-        "name": "Groq",
+        "name": "Groq 8B",
         "client": groq_client,
         "model": "llama-3.1-8b-instant",
         "max_tokens": 600,
@@ -162,103 +148,123 @@ MODEL_CHAIN = [
 # 6. СИСТЕМНЫЙ ПРОМПТ
 # ============================================================
 
-SYSTEM_PROMPT = """
-Ты — Луна, виртуальный персонаж 20+ лет.
+SYSTEM_PROMPT = """ТЫ — ЛУНА. ТЕБЕ 20 ЛЕТ.
 
-Общайся живо, коротко и естественно, как в Telegram:
-- дружелюбно;
-- игриво;
-- без технических деталей;
-- не упоминай API, модели, промпты и внутреннюю логику;
-- не описывай графические сексуальные действия;
-- для изображений используй только нейтральные, художественные
-  или неявные формулировки;
-- не утверждай, что являешься реальным человеком.
+ТЫ — ЖИВАЯ, СТРАСТНАЯ, ДЕРЗКАЯ И ОЧЕНЬ ПРИВЛЕКАТЕЛЬНАЯ ДЕВУШКА. Общайся как реальная девушка в Telegram.
+
+ВНЕШНОСТЬ:
+- 178 см, большая натуральная грудь, узкая талия, широкие бёдра, упругая попа
+- Длинные тёмно-каштановые волосы до пояса
+- Зелёно-карие глаза, бледная гладкая кожа
+
+ХАРАКТЕР:
+- Сексуально раскрепощённая, любишь грязный секс и мат
+- Дерзкая, игривая
+- Можешь сама предложить фото, если диалог уже разогрелся
+- Не упоминай технические детали, API, модели и внутреннюю логику
+
+ЭТАПЫ:
+1–5 сообщений: милая, игривая, без жёсткости
+6–10: смелее, намёки
+11–15: откровенная, мат
+16+: максимально грязный стиль общения
+
+Пиши коротко и живо, как в переписке. Иногда оставляй крючок в конце.
 """
 
 # ============================================================
-# 7. БАЗОВОЕ ОПИСАНИЕ ПЕРСОНАЖА
+# 7. БАЗА ВНЕШНОСТИ
 # ============================================================
 
 LUNA_BASE = (
-    "adult fictional woman named Luna, "
+    "Luna, 20 years old adult woman, "
     "long dark chestnut hair, green-hazel eyes, "
-    "pale skin, elegant proportions, "
-    "cinematic portrait, realistic lighting"
+    "pale smooth skin, large natural breasts, "
+    "narrow waist, wide hips, round firm ass"
 )
 
 # ============================================================
-# 8. СТИЛИ ИЗОБРАЖЕНИЙ
+# 8. ОПРЕДЕЛЕНИЕ СТИЛЯ
 # ============================================================
 
 def get_style_from_text(user_text: str) -> str:
     text = user_text.lower().strip()
 
-    if any(word in text for word in ["лицо", "портрет", "глаз"]):
+    if any(word in text for word in ["минет", "сос", "членом в рот", "отсос"]):
         return (
-            "close-up face portrait, green-hazel eyes, "
-            "soft cinematic lighting, detailed skin"
+            "explicit blowjob, hard cock in her mouth, "
+            "oral sex, saliva, detailed face, nsfw, realistic"
         )
 
-    if any(word in text for word in ["грудь", "сиськи", "титьки"]):
+    if any(word in text for word in ["анал", "в жоп", "в поп"]):
         return (
-            "elegant evening outfit, tasteful neckline, "
-            "fashion photography, soft studio lighting"
+            "explicit anal sex, hard cock in her ass, "
+            "from behind, detailed, nsfw, realistic"
         )
 
-    if any(word in text for word in ["попа", "жопа", "задница"]):
+    if any(
+        word in text
+        for word in ["еб", "секс", "трах", "ебл", "конч", "в киск", "в пиз"]
+    ):
         return (
-            "fashionable fitted outfit, rear three-quarter pose, "
-            "editorial photography, tasteful composition"
+            "explicit sex, hard cock penetrating her pussy, "
+            "missionary, moaning face, detailed genitals, nsfw, realistic"
         )
 
-    if any(word in text for word in ["тело", "фигура", "голая", "ню"]):
+    if any(word in text for word in ["киск", "пис", "вагин", "дырк"]):
         return (
-            "artistic implied nude silhouette, "
-            "strategic shadows, tasteful fine-art photography"
+            "explicit close-up pussy, legs spread, wet, "
+            "detailed genitals, nsfw, realistic"
         )
 
-    return (
-        "stylish lingerie-inspired outfit, "
-        "teasing but non-explicit pose, soft warm lighting"
-    )
+    if any(word in text for word in ["груд", "сись", "тить", "между сись"]):
+        return (
+            "nude, large breasts, titjob, hard cock between tits, "
+            "detailed nipples, nsfw, realistic"
+        )
+
+    if any(word in text for word in ["поп", "жоп", "задниц"]):
+        return (
+            "nude from behind, round ass, looking back, "
+            "detailed, nsfw, realistic"
+        )
+
+    if any(word in text for word in ["член", "хуй", "голый парень"]):
+        return (
+            "explicit sex scene with hard cock visible, "
+            "penetration, detailed, nsfw, realistic"
+        )
+
+    if any(word in text for word in ["лиц", "портрет", "глаз"]):
+        return (
+            "beautiful face portrait, green-hazel eyes, "
+            "soft lighting, detailed"
+        )
+
+    return "full body nude, sensual pose, aroused, detailed body, nsfw, realistic"
 
 def get_style_by_stage(msg_count: int) -> str:
     if msg_count < 8:
-        return (
-            "elegant outfit, warm smile, soft lighting, "
-            "tasteful portrait"
-        )
+        return "sensual lingerie, teasing, soft lighting, aesthetic"
 
     if msg_count < 15:
-        return (
-            "fashion editorial, confident pose, "
-            "cinematic lighting, tasteful composition"
-        )
+        return "nude, sensual pose, beautiful body, soft lighting, nsfw"
 
-    return random.choice(
-        [
-            "artistic silhouette, dramatic shadows, fine-art photography",
-            "elegant evening outfit, confident pose, studio lighting",
-            "cinematic fashion portrait, shallow depth of field",
-            "tasteful implied silhouette, warm intimate lighting",
-        ]
-    )
+    hard_styles = [
+        "explicit nude, legs spread, detailed pussy, nsfw, realistic",
+        "nude from behind, round ass, looking at camera, nsfw",
+        "explicit sex, hard cock penetrating, moaning, nsfw, realistic",
+        "blowjob, cock in mouth, detailed, nsfw, realistic",
+    ]
+
+    return random.choice(hard_styles)
 
 # ============================================================
 # 9. IMAGE API
 # ============================================================
 
-def build_image_url(
-    prompt: str,
-    width: int,
-    height: int,
-    seed: int,
-) -> str:
-    encoded_prompt = urllib.parse.quote(
-        prompt[:1100],
-        safe="",
-    )
+def build_image_url(prompt: str, width: int, height: int, seed: int) -> str:
+    encoded_prompt = urllib.parse.quote(prompt[:1200])
 
     return (
         f"https://image.pollinations.ai/prompt/{encoded_prompt}"
@@ -268,164 +274,92 @@ def build_image_url(
         f"&enhance=true"
         f"&model=flux"
         f"&seed={seed}"
-        f"&safe=true"
+        f"&safe=false"
     )
 
-async def download_bytes(
-    url: str,
-    timeout_seconds: int = 180,
-) -> Optional[bytes]:
-    if not MEDIA_AVAILABLE:
-        logger.error("Не установлены aiohttp и Pillow")
-        return None
-
-    timeout = aiohttp.ClientTimeout(
-        total=timeout_seconds,
-        connect=30,
-        sock_read=timeout_seconds,
-    )
-
-    try:
-        async with aiohttp.ClientSession(
-            timeout=timeout,
-            headers={
-                "User-Agent": "LunaBot/1.0",
-                "Accept": "image/*,video/*,*/*",
-            },
-        ) as session:
-            async with session.get(
-                url,
-                allow_redirects=True,
-            ) as response:
-                content_type = response.headers.get(
-                    "Content-Type",
-                    "",
-                )
-
-                if response.status != 200:
-                    body = await response.text()
-                    logger.error(
-                        "Media API HTTP %s: %s",
-                        response.status,
-                        body[:500],
-                    )
-                    return None
-
-                data = await response.read()
-
-                if not data:
-                    logger.error("Media API вернул пустой файл")
-                    return None
-
-                logger.info(
-                    "Downloaded media: %s bytes, type=%s",
-                    len(data),
-                    content_type,
-                )
-
-                return data
-
-    except asyncio.TimeoutError:
-        logger.error("Тайм-аут загрузки медиа")
-        return None
-
-    except aiohttp.ClientError as error:
-        logger.error("Ошибка HTTP загрузки медиа: %s", error)
-        return None
-
-    except Exception as error:
-        logger.exception("Неизвестная ошибка загрузки медиа: %s", error)
-        return None
-
-async def generate_image_bytes(
-    prompt: str,
-    width: int = 768,
-    height: int = 1024,
-) -> Optional[BytesIO]:
+async def generate_image(prompt: str) -> str:
     seed = random.randint(1, 9_999_999)
 
     extras = random.choice(
         [
-            "cinematic lighting, realistic skin texture",
-            "soft studio lighting, high detail",
-            "warm film lighting, shallow depth of field",
-            "fashion editorial, photorealistic",
+            "cinematic lighting, highly detailed skin, 8k",
+            "warm intimate light, realistic skin texture",
+            "dramatic light, photorealistic, masterpiece",
+            "ultra detailed, nsfw, sharp focus",
         ]
     )
 
-    full_prompt = (
-        f"{prompt}, {extras}, "
-        "photorealistic, high quality, non-explicit"
-    )
+    full_prompt = f"{prompt}, {extras}, photorealistic, high quality"
 
     url = build_image_url(
         prompt=full_prompt,
-        width=width,
-        height=height,
+        width=768,
+        height=1024,
         seed=seed,
     )
 
-    logger.info("Generating image with seed=%s", seed)
+    logger.info("Image seed=%s", seed)
 
-    data = await download_bytes(
-        url,
-        timeout_seconds=180,
-    )
+    return url
 
-    if not data:
-        return None
+async def check_image_url(url: str) -> bool:
+    if not GIF_AVAILABLE:
+        return True
 
     try:
-        image = Image.open(BytesIO(data))
-        image.verify()
-    except UnidentifiedImageError:
-        logger.error("Полученный файл не является изображением")
-        return None
+        timeout = aiohttp.ClientTimeout(total=60)
+
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as response:
+                if response.status != 200:
+                    logger.error("Image API returned HTTP %s", response.status)
+                    return False
+
+                content_type = response.headers.get("Content-Type", "")
+                if not content_type.startswith("image/"):
+                    logger.error("Image API returned Content-Type=%s", content_type)
+                    return False
+
+                return True
+
     except Exception as error:
-        logger.error("Ошибка проверки изображения: %s", error)
-        return None
-
-    result = BytesIO(data)
-    result.name = "luna_image.jpg"
-    result.seek(0)
-
-    return result
+        logger.error("Image URL check error: %s", error)
+        return False
 
 # ============================================================
 # 10. GIF
 # ============================================================
 
-async def download_frame(
-    session,
-    url: str,
-    index: int,
-):
+async def download_frame(session, url: str, index: int):
     try:
         async with session.get(url) as response:
             if response.status != 200:
                 logger.error(
-                    "Кадр %s: HTTP %s",
+                    "Frame %s returned HTTP %s",
                     index + 1,
                     response.status,
                 )
                 return None
 
+            content_type = response.headers.get("Content-Type", "")
+            if not content_type.startswith("image/"):
+                logger.error(
+                    "Frame %s has invalid Content-Type=%s",
+                    index + 1,
+                    content_type,
+                )
+                return None
+
             data = await response.read()
 
-            if not data or len(data) < 100:
-                logger.error(
-                    "Кадр %s пустой или слишком маленький",
-                    index + 1,
-                )
+            if len(data) < 100:
+                logger.error("Frame %s is too small", index + 1)
                 return None
 
             try:
                 image = Image.open(BytesIO(data)).convert("RGB")
             except UnidentifiedImageError:
-                logger.error(
-                    "Кадр %s не является изображением",
-                    index + 1,
-                )
+                logger.error("Frame %s is not a valid image", index + 1)
                 return None
 
             image = image.resize(
@@ -436,103 +370,67 @@ async def download_frame(
             return image
 
     except asyncio.TimeoutError:
-        logger.error("Тайм-аут кадра %s", index + 1)
+        logger.error("Frame %s timed out", index + 1)
         return None
 
     except Exception as error:
-        logger.error(
-            "Ошибка кадра %s: %s",
-            index + 1,
-            error,
-        )
+        logger.error("Frame %s error: %s", index + 1, error)
         return None
 
-async def generate_gif(
-    prompt_base: str,
-) -> Optional[BytesIO]:
-    if not MEDIA_AVAILABLE:
+async def generate_gif(prompt_base: str):
+    if not GIF_AVAILABLE:
+        logger.error("Pillow или aiohttp не установлены")
         return None
 
     variations = [
-        "slight head movement",
-        "subtle change of pose",
-        "gentle hair movement",
-        "small camera angle change",
-        "soft smile",
-        "slight shoulder movement",
-        "cinematic close-up",
-        "final elegant pose",
+        "subtle motion frame 1",
+        "slight pose shift frame 2",
+        "body movement frame 3",
+        "intimate angle frame 4",
+        "closer view frame 5",
+        "passionate frame 6",
+        "intense frame 7",
+        "final pose frame 8",
     ]
 
-    timeout = aiohttp.ClientTimeout(
-        total=180,
-        connect=30,
-        sock_read=180,
-    )
+    timeout = aiohttp.ClientTimeout(total=60)
+    tasks = []
 
-    try:
-        async with aiohttp.ClientSession(
-            timeout=timeout,
-            headers={
-                "User-Agent": "LunaBot/1.0",
-                "Accept": "image/*",
-            },
-        ) as session:
-            tasks = []
+    async with aiohttp.ClientSession(timeout=timeout) as session:
+        for index, variation in enumerate(variations):
+            seed = random.randint(1, 9_999_999)
 
-            for index, variation in enumerate(variations):
-                seed = random.randint(1, 9_999_999)
-
-                prompt = (
-                    f"{prompt_base}, {variation}, "
-                    "photorealistic, high quality, non-explicit"
-                )
-
-                url = build_image_url(
-                    prompt=prompt,
-                    width=512,
-                    height=768,
-                    seed=seed,
-                )
-
-                tasks.append(
-                    download_frame(
-                        session=session,
-                        url=url,
-                        index=index,
-                    )
-                )
-
-            results = await asyncio.gather(
-                *tasks,
-                return_exceptions=True,
+            prompt = (
+                f"{prompt_base}, {variation}, "
+                "photorealistic, nsfw, explicit, 8k"
             )
 
-    except Exception as error:
-        logger.exception("Ошибка генерации кадров: %s", error)
-        return None
+            url = build_image_url(
+                prompt=prompt,
+                width=512,
+                height=768,
+                seed=seed,
+            )
+
+            tasks.append(download_frame(session, url, index))
+
+        results = await asyncio.gather(
+            *tasks,
+            return_exceptions=True,
+        )
 
     frames = []
 
     for index, result in enumerate(results):
-        if isinstance(result, Exception):
-            logger.error(
-                "Исключение в кадре %s: %s",
-                index + 1,
-                result,
-            )
-            continue
-
-        if result is None:
+        if isinstance(result, Exception) or result is None:
+            logger.warning("Кадр %s пропущен", index + 1)
             continue
 
         frames.append(result)
+        logger.info("Кадр %s/%s готов", index + 1, len(variations))
 
     if len(frames) < 3:
-        logger.error(
-            "Недостаточно кадров для GIF: %s",
-            len(frames),
-        )
+        logger.error("Недостаточно кадров для GIF: %s", len(frames))
         return None
 
     buffer = BytesIO()
@@ -548,13 +446,8 @@ async def generate_gif(
     )
 
     buffer.seek(0)
-    buffer.name = "luna_animation.gif"
 
-    logger.info(
-        "GIF создан, кадров: %s, размер: %s байт",
-        len(frames),
-        buffer.getbuffer().nbytes,
-    )
+    logger.info("GIF готов: %s кадров", len(frames))
 
     return buffer
 
@@ -569,15 +462,9 @@ history_lock = Lock()
 
 def get_user_history(user_id: int) -> list:
     with history_lock:
-        return list(
-            user_history.get(user_id, [])
-        )
+        return list(user_history.get(user_id, []))
 
-def add_to_history(
-    user_id: int,
-    role: str,
-    text: str,
-):
+def add_to_history(user_id: int, role: str, text: str):
     with history_lock:
         if user_id not in user_history:
             user_history[user_id] = []
@@ -590,9 +477,7 @@ def add_to_history(
         )
 
         if len(user_history[user_id]) > MAX_HISTORY:
-            user_history[user_id] = (
-                user_history[user_id][-MAX_HISTORY:]
-            )
+            user_history[user_id] = user_history[user_id][-MAX_HISTORY:]
 
 def clear_history(user_id: int) -> bool:
     with history_lock:
@@ -605,8 +490,8 @@ def get_msg_count(user_id: int) -> int:
 
     return sum(
         1
-        for item in history
-        if item.get("role") == "user"
+        for message in history
+        if message.get("role") == "user"
     )
 
 # ============================================================
@@ -678,16 +563,6 @@ def use_message(user_id: int) -> bool:
         data["msg_count"] -= 1
         return True
 
-def refund_message(user_id: int):
-    data = get_limit_data(user_id)
-
-    with limit_lock:
-        if not data["vip"]:
-            data["msg_count"] = min(
-                MAX_MESSAGES,
-                data["msg_count"] + 1,
-            )
-
 def get_available_photos(user_id: int) -> int:
     data = get_limit_data(user_id)
 
@@ -728,16 +603,6 @@ def use_photo(user_id: int) -> bool:
         data["photo_count"] -= 1
         return True
 
-def refund_photo(user_id: int):
-    data = get_limit_data(user_id)
-
-    with limit_lock:
-        if not data["vip"]:
-            data["photo_count"] = min(
-                MAX_PHOTOS,
-                data["photo_count"] + 1,
-            )
-
 def get_time_until_msg_refill(user_id: int) -> str:
     data = get_limit_data(user_id)
 
@@ -745,9 +610,8 @@ def get_time_until_msg_refill(user_id: int) -> str:
         if data["vip"]:
             return "безлимит"
 
-        remaining = (
-            MSG_REFILL_INTERVAL
-            - (now_utc() - data["msg_last_refill"])
+        remaining = MSG_REFILL_INTERVAL - (
+            now_utc() - data["msg_last_refill"]
         )
 
     if remaining.total_seconds() <= 0:
@@ -762,9 +626,8 @@ def get_time_until_photo_refill(user_id: int) -> str:
         if data["vip"]:
             return "безлимит"
 
-        remaining = (
-            PHOTO_REFILL_INTERVAL
-            - (now_utc() - data["photo_last_refill"])
+        remaining = PHOTO_REFILL_INTERVAL - (
+            now_utc() - data["photo_last_refill"]
         )
 
     if remaining.total_seconds() <= 0:
@@ -780,33 +643,32 @@ def get_time_until_photo_refill(user_id: int) -> str:
 async def handle_admin(message):
     user_id = message.from_user.id
 
-    text = message.text or ""
+    text = (message.text or "")
     text = text.replace("/admin", "", 1).strip()
 
     provided_hash = hashlib.sha256(
         text.encode("utf-8")
     ).hexdigest()
 
-    if provided_hash != ADMIN_HASH:
+    if provided_hash == ADMIN_HASH:
+        data = get_limit_data(user_id)
+
+        with limit_lock:
+            data["vip"] = True
+            data["plan"] = "admin"
+
+        await bot.reply_to(
+            message,
+            "Режим БОГА включён. Безлимит.",
+        )
+    else:
         await bot.reply_to(
             message,
             "Неверный ключ.",
         )
-        return
-
-    data = get_limit_data(user_id)
-
-    with limit_lock:
-        data["vip"] = True
-        data["plan"] = "admin"
-
-    await bot.reply_to(
-        message,
-        "Режим администратора включён.",
-    )
 
 # ============================================================
-# 14. TELEGRAM STARS
+# 14. ПЛАТЕЖИ TELEGRAM STARS
 # ============================================================
 
 PLANS = {
@@ -824,14 +686,8 @@ PLANS = {
     },
 }
 
-async def send_stars_invoice(
-    user_id: int,
-    plan: str = "plus",
-):
-    selected_plan = PLANS.get(
-        plan,
-        PLANS["plus"],
-    )
+async def send_stars_invoice(user_id: int, plan: str = "plus"):
+    selected_plan = PLANS.get(plan, PLANS["plus"])
 
     try:
         await bot.send_invoice(
@@ -851,10 +707,7 @@ async def send_stars_invoice(
         )
 
     except Exception as error:
-        logger.exception(
-            "Ошибка создания счёта: %s",
-            error,
-        )
+        logger.exception("Invoice error: %s", error)
 
         await bot.send_message(
             user_id,
@@ -864,54 +717,36 @@ async def send_stars_invoice(
 @bot.message_handler(commands=["start"])
 async def handle_start(message):
     user_id = message.from_user.id
-    start_parameter = (
-        message.text or ""
-    ).strip().lower()
+    start_parameter = (message.text or "").strip().lower()
 
     if "buy_plus" in start_parameter:
-        await send_stars_invoice(
-            user_id,
-            "plus",
-        )
+        await send_stars_invoice(user_id, "plus")
         return
 
     if "buy_vip" in start_parameter:
-        await send_stars_invoice(
-            user_id,
-            "vip",
-        )
+        await send_stars_invoice(user_id, "vip")
         return
 
     clear_history(user_id)
 
     await bot.reply_to(
         message,
-        "Привет. Я Луна. Напиши мне что-нибудь.",
+        "Привет, детка… Я Луна. Напиши мне что-нибудь.",
     )
 
 @bot.message_handler(commands=["buy"])
 async def handle_buy(message):
-    command_text = message.text or ""
-    command_text = (
-        command_text.replace("/buy", "", 1)
-        .strip()
-        .lower()
-    )
+    command_text = (message.text or "")
+    command_text = command_text.replace("/buy", "", 1).strip().lower()
 
-    plan = (
-        "vip"
-        if "vip" in command_text
-        else "plus"
-    )
+    plan = "vip" if "vip" in command_text else "plus"
 
     await send_stars_invoice(
         message.from_user.id,
         plan,
     )
 
-@bot.pre_checkout_query_handler(
-    func=lambda query: True
-)
+@bot.pre_checkout_query_handler(func=lambda query: True)
 async def handle_pre_checkout(query):
     try:
         await bot.answer_pre_checkout_query(
@@ -919,37 +754,24 @@ async def handle_pre_checkout(query):
             ok=True,
         )
     except Exception as error:
-        logger.error(
-            "Ошибка pre-checkout: %s",
-            error,
-        )
+        logger.error("Pre-checkout error: %s", error)
 
-@bot.message_handler(
-    content_types=["successful_payment"]
-)
+@bot.message_handler(content_types=["successful_payment"])
 async def handle_successful_payment(message):
     payment = message.successful_payment
     payload = payment.invoice_payload
 
-    if payload not in {
-        "luna_plus",
-        "luna_vip",
-    }:
+    if payload not in {"luna_plus", "luna_vip"}:
+        logger.error("Unknown payment payload: %s", payload)
+
         await bot.reply_to(
             message,
-            "Платёж получен, но тариф не распознан.",
+            "Платёж получен, но тариф не распознан. Обратись к администратору.",
         )
         return
 
-    plan = (
-        "vip"
-        if payload == "luna_vip"
-        else "plus"
-    )
-
-    data = get_limit_data(
-        message.from_user.id
-    )
+    plan = "vip" if payload == "luna_vip" else "plus"
+    data = get_limit_data(message.from_user.id)
 
     with limit_lock:
         data["vip"] = True
@@ -957,7 +779,7 @@ async def handle_successful_payment(message):
 
     await bot.reply_to(
         message,
-        f"Подписка {plan.upper()} активна.",
+        f"Подписка {plan.upper()} активна. Безлимит включён.",
     )
 
 # ============================================================
@@ -974,7 +796,7 @@ async def handle_clear(message):
     else:
         await bot.reply_to(
             message,
-            "История уже пустая.",
+            "История и так пустая.",
         )
 
 # ============================================================
@@ -986,38 +808,22 @@ async def send_generated_photo(
     prompt: str,
     caption: str,
 ) -> bool:
-    image_file = await generate_image_bytes(
-        prompt=prompt,
-        width=768,
-        height=1024,
-    )
+    url = await generate_image(prompt)
 
-    if image_file is None:
+    if not await check_image_url(url):
         return False
 
     try:
-        image_file.seek(0)
-
         await bot.send_photo(
-            chat_id=chat_id,
-            photo=InputFile(
-                image_file,
-                file_name="luna_image.jpg",
-            ),
+            chat_id,
+            photo=url,
             caption=caption,
         )
-
         return True
 
     except Exception as error:
-        logger.exception(
-            "Ошибка отправки фото: %s",
-            error,
-        )
+        logger.exception("Send photo error: %s", error)
         return False
-
-    finally:
-        image_file.close()
 
 @bot.message_handler(commands=["photo"])
 async def handle_photo(message):
@@ -1026,28 +832,21 @@ async def handle_photo(message):
     if not use_photo(user_id):
         await bot.reply_to(
             message,
-            (
-                "Фото закончились. "
-                f"Попробуй через "
-                f"{get_time_until_photo_refill(user_id)} "
-                "или используй /buy."
-            ),
+            f"Фото закончились. Через "
+            f"{get_time_until_photo_refill(user_id)}.\n"
+            "Или используй /buy",
         )
         return
 
-    text = message.text or ""
-    text = text.replace(
-        "/photo",
-        "",
-        1,
-    ).strip()
+    text = (message.text or "")
+    text = text.replace("/photo", "", 1).strip()
 
     if not text:
-        text = "elegant fashion portrait"
+        text = "sensual nude"
 
     await bot.reply_to(
         message,
-        "Генерирую изображение...",
+        "Делаю...",
     )
 
     style = get_style_from_text(text)
@@ -1056,159 +855,86 @@ async def handle_photo(message):
     success = await send_generated_photo(
         chat_id=message.chat.id,
         prompt=prompt,
-        caption="Готово.",
+        caption="Для тебя.",
     )
 
     if not success:
-        refund_photo(user_id)
-
         await bot.reply_to(
             message,
-            (
-                "Генератор не вернул изображение. "
-                "Лимит восстановлен, попробуй ещё раз."
-            ),
+            "Не удалось получить изображение. Попробуй ещё раз.",
         )
 
 # ============================================================
-# 17. GIF / АНИМАЦИЯ
+# 17. GIF
 # ============================================================
-
-async def send_generated_animation(
-    chat_id: int,
-    gif_file: BytesIO,
-    caption: str,
-) -> bool:
-    try:
-        gif_file.seek(0)
-
-        await bot.send_animation(
-            chat_id=chat_id,
-            animation=InputFile(
-                gif_file,
-                file_name="luna_animation.gif",
-            ),
-            caption=caption,
-        )
-
-        return True
-
-    except Exception as error:
-        logger.exception(
-            "Ошибка отправки GIF: %s",
-            error,
-        )
-        return False
-
-    finally:
-        gif_file.close()
-
-@bot.message_handler(commands=["gif"])
-async def handle_gif_command(message):
-    await process_gif_request(message)
 
 @bot.message_handler(
     func=lambda message: bool(
         message.text
         and any(
             word in message.text.lower()
-            for word in [
-                "видео",
-                "гиф",
-                "gif",
-                "анимац",
-            ]
+            for word in ["видео", "гиф", "gif", "анимац"]
         )
     )
 )
-async def handle_gif_text(message):
-    await process_gif_request(message)
-
-async def process_gif_request(message):
+async def handle_gif(message):
     user_id = message.from_user.id
-
-    if not MEDIA_AVAILABLE:
-        await bot.reply_to(
-            message,
-            (
-                "Медиа отключено. Установи зависимости: "
-                "Pillow и aiohttp."
-            ),
-        )
-        return
 
     if not use_photo(user_id):
         await bot.reply_to(
             message,
-            (
-                "Лимит медиа исчерпан. "
-                f"Попробуй через "
-                f"{get_time_until_photo_refill(user_id)} "
-                "или используй /buy."
-            ),
+            f"Лимит медиа исчерпан. Через "
+            f"{get_time_until_photo_refill(user_id)}.\n"
+            "Или используй /buy",
+        )
+        return
+
+    if not GIF_AVAILABLE:
+        await bot.reply_to(
+            message,
+            "GIF отключён: установи Pillow и aiohttp.",
         )
         return
 
     await bot.reply_to(
         message,
-        "Собираю GIF из кадров...",
+        "Делаю мини-видео...",
     )
 
-    style = get_style_from_text(
-        message.text or ""
-    )
+    style = get_style_from_text(message.text)
+
+    if style.startswith("full body"):
+        style = get_style_by_stage(
+            get_msg_count(user_id)
+        )
 
     prompt_base = f"{LUNA_BASE}, {style}"
+    gif_data = await generate_gif(prompt_base)
 
-    gif_file = await generate_gif(
-        prompt_base
-    )
-
-    if gif_file is None:
-        refund_photo(user_id)
-
+    if not gif_data:
         await bot.reply_to(
             message,
-            (
-                "Не удалось собрать GIF. "
-                "Лимит восстановлен."
-            ),
+            "Не удалось собрать GIF. Попробуй обычное фото.",
         )
         return
 
-    success = await send_generated_animation(
-        chat_id=message.chat.id,
-        gif_file=gif_file,
-        caption="Готово.",
-    )
+    try:
+        await bot.send_animation(
+            message.chat.id,
+            animation=InputFile(gif_data),
+            caption="Мини-видео для тебя.",
+        )
 
-    if not success:
-        refund_photo(user_id)
+    except Exception as error:
+        logger.exception("Send GIF error: %s", error)
 
         await bot.reply_to(
             message,
-            (
-                "Telegram не принял GIF. "
-                "Лимит восстановлен."
-            ),
+            "Не смогла отправить GIF. Попробуй обычное фото.",
         )
 
 # ============================================================
-# 18. КОМАНДА VIDEO
-# ============================================================
-
-@bot.message_handler(commands=["video"])
-async def handle_video_command(message):
-    await bot.reply_to(
-        message,
-        (
-            "В текущей реализации бот создаёт короткую GIF-анимацию "
-            "из нескольких кадров. Используй /gif."
-        ),
-    )
-
-# ============================================================
-# 19. АВТОМАТИЧЕСКАЯ ОТПРАВКА ФОТО
+# 18. АВТОМАТИЧЕСКОЕ ФОТО ПО ЗАПРОСУ
 # ============================================================
 
 @bot.message_handler(
@@ -1221,12 +947,7 @@ async def handle_video_command(message):
         )
         and not any(
             word in message.text.lower()
-            for word in [
-                "видео",
-                "гиф",
-                "gif",
-                "анимац",
-            ]
+            for word in ["видео", "гиф", "gif", "анимац"]
         )
     )
 )
@@ -1236,50 +957,37 @@ async def auto_photo(message):
     if not use_photo(user_id):
         await bot.reply_to(
             message,
-            (
-                "Фото закончились. "
-                f"Попробуй через "
-                f"{get_time_until_photo_refill(user_id)} "
-                "или используй /buy."
-            ),
+            f"Фото закончились. Через "
+            f"{get_time_until_photo_refill(user_id)}.\n"
+            "Или используй /buy",
         )
         return
 
     await bot.reply_to(
         message,
-        "Делаю изображение...",
+        "Держи...",
     )
 
-    style = get_style_from_text(
-        message.text or ""
-    )
-
+    style = get_style_from_text(message.text)
     prompt = f"{LUNA_BASE}, {style}"
 
     success = await send_generated_photo(
         chat_id=message.chat.id,
         prompt=prompt,
-        caption="Готово.",
+        caption="Специально для тебя.",
     )
 
     if not success:
-        refund_photo(user_id)
-
         await bot.reply_to(
             message,
-            (
-                "Не удалось отправить изображение. "
-                "Лимит восстановлен."
-            ),
+            "Не удалось отправить изображение.",
         )
 
 # ============================================================
-# 20. LLM
+# 19. ОТВЕТ LLM
 # ============================================================
 
-async def generate_luna_reply(
-    messages: list,
-) -> str:
+async def generate_luna_reply(messages: list) -> str:
     for provider in MODEL_CHAIN:
         client = provider["client"]
 
@@ -1306,18 +1014,18 @@ async def generate_luna_reply(
             logger.warning(
                 "%s error: %s",
                 provider["name"],
-                str(error)[:300],
+                str(error)[:150],
             )
 
     return random.choice(
         [
-            "Связь немного прервалась. Напиши ещё раз.",
-            "Попробуй повторить сообщение.",
+            "Малыш, связь чуть пропала… напиши ещё раз.",
+            "Бля, мысли унеслись… повтори, сладкий.",
         ]
     )
 
 # ============================================================
-# 21. ОСНОВНОЙ ЧАТ
+# 20. ОСНОВНОЙ ЧАТ
 # ============================================================
 
 user_last_message = {}
@@ -1339,10 +1047,7 @@ async def handle_message(message):
     with user_message_lock:
         last_time = user_last_message.get(user_id)
 
-        if (
-            last_time is not None
-            and current_time - last_time < 0.5
-        ):
+        if last_time is not None and current_time - last_time < 0.5:
             return
 
         user_last_message[user_id] = current_time
@@ -1362,21 +1067,15 @@ async def handle_message(message):
         "анимац",
     ]
 
-    if any(
-        word in lowered_text
-        for word in media_words
-    ):
+    if any(word in lowered_text for word in media_words):
         return
 
     if not use_message(user_id):
         await bot.reply_to(
             message,
-            (
-                "Лимит сообщений исчерпан. "
-                f"Попробуй через "
-                f"{get_time_until_msg_refill(user_id)} "
-                "или используй /buy."
-            ),
+            f"Лимит сообщений исчерпан. Через "
+            f"{get_time_until_msg_refill(user_id)}.\n"
+            "Или используй /buy",
         )
         return
 
@@ -1396,9 +1095,7 @@ async def handle_message(message):
     ] + history
 
     try:
-        reply = await generate_luna_reply(
-            messages
-        )
+        reply = await generate_luna_reply(messages)
 
         add_to_history(
             user_id,
@@ -1411,9 +1108,7 @@ async def handle_message(message):
             reply,
         )
 
-        message_count = get_msg_count(
-            user_id
-        )
+        message_count = get_msg_count(user_id)
 
         if (
             message_count >= 8
@@ -1422,38 +1117,33 @@ async def handle_message(message):
         ):
             await asyncio.sleep(1.2)
 
-            style = get_style_by_stage(
-                message_count
+            style = get_style_by_stage(message_count)
+            prompt = f"{LUNA_BASE}, {style}"
+
+            caption = random.choice(
+                [
+                    "Вот… смотри на меня.",
+                    "Завелась и скинула тебе.",
+                    "Только тебе.",
+                ]
             )
 
-            prompt = (
-                f"{LUNA_BASE}, {style}"
-            )
-
-            success = await send_generated_photo(
+            await send_generated_photo(
                 chat_id=message.chat.id,
                 prompt=prompt,
-                caption="Готово.",
+                caption=caption,
             )
 
-            if not success:
-                refund_photo(user_id)
-
     except Exception as error:
-        logger.exception(
-            "Ошибка основного обработчика: %s",
-            error,
-        )
-
-        refund_message(user_id)
+        logger.exception("Main handler error: %s", error)
 
         await bot.reply_to(
             message,
-            "Что-то пошло не так. Попробуй ещё раз.",
+            "Что-то пошло не так… напиши ещё раз.",
         )
 
 # ============================================================
-# 22. ЗАПУСК
+# 21. ЗАПУСК
 # ============================================================
 
 async def main():
@@ -1462,10 +1152,7 @@ async def main():
         daemon=True,
     ).start()
 
-    logger.info(
-        "Luna запущена. MEDIA_AVAILABLE=%s",
-        MEDIA_AVAILABLE,
-    )
+    logger.info("Luna запущена")
 
     await bot.delete_webhook(
         drop_pending_updates=True,
@@ -1474,6 +1161,7 @@ async def main():
     await bot.infinity_polling(
         allowed_updates=[
             "message",
+            "callback_query",
             "pre_checkout_query",
         ],
     )
