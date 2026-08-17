@@ -53,7 +53,6 @@ if not BOT_TOKEN:
     raise SystemExit(1)
 
 bot = AsyncTeleBot(BOT_TOKEN)
-
 app = Flask(__name__)
 
 # ============================================================
@@ -77,6 +76,7 @@ def health():
         {
             "status": "ok",
             "timestamp": now_utc().isoformat(),
+            "media_available": GIF_AVAILABLE,
         }
     )
 
@@ -94,7 +94,10 @@ def run_web():
 # 5. LLM-КЛИЕНТЫ
 # ============================================================
 
-def create_client(base_url: str, api_key: Optional[str]) -> Optional[AsyncOpenAI]:
+def create_client(
+    base_url: str,
+    api_key: Optional[str],
+) -> Optional[AsyncOpenAI]:
     if not api_key:
         return None
 
@@ -263,7 +266,12 @@ def get_style_by_stage(msg_count: int) -> str:
 # 9. IMAGE API
 # ============================================================
 
-def build_image_url(prompt: str, width: int, height: int, seed: int) -> str:
+def build_image_url(
+    prompt: str,
+    width: int,
+    height: int,
+    seed: int,
+) -> str:
     encoded_prompt = urllib.parse.quote(prompt[:1200])
 
     return (
@@ -312,12 +320,19 @@ async def check_image_url(url: str) -> bool:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as response:
                 if response.status != 200:
-                    logger.error("Image API returned HTTP %s", response.status)
+                    logger.error(
+                        "Image API returned HTTP %s",
+                        response.status,
+                    )
                     return False
 
                 content_type = response.headers.get("Content-Type", "")
+
                 if not content_type.startswith("image/"):
-                    logger.error("Image API returned Content-Type=%s", content_type)
+                    logger.error(
+                        "Image API returned Content-Type=%s",
+                        content_type,
+                    )
                     return False
 
                 return True
@@ -327,10 +342,14 @@ async def check_image_url(url: str) -> bool:
         return False
 
 # ============================================================
-# 10. GIF
+# 10. GIF / ВИДЕО
 # ============================================================
 
-async def download_frame(session, url: str, index: int):
+async def download_frame(
+    session,
+    url: str,
+    index: int,
+):
     try:
         async with session.get(url) as response:
             if response.status != 200:
@@ -342,6 +361,7 @@ async def download_frame(session, url: str, index: int):
                 return None
 
             content_type = response.headers.get("Content-Type", "")
+
             if not content_type.startswith("image/"):
                 logger.error(
                     "Frame %s has invalid Content-Type=%s",
@@ -353,13 +373,19 @@ async def download_frame(session, url: str, index: int):
             data = await response.read()
 
             if len(data) < 100:
-                logger.error("Frame %s is too small", index + 1)
+                logger.error(
+                    "Frame %s is too small",
+                    index + 1,
+                )
                 return None
 
             try:
                 image = Image.open(BytesIO(data)).convert("RGB")
             except UnidentifiedImageError:
-                logger.error("Frame %s is not a valid image", index + 1)
+                logger.error(
+                    "Frame %s is not a valid image",
+                    index + 1,
+                )
                 return None
 
             image = image.resize(
@@ -370,11 +396,18 @@ async def download_frame(session, url: str, index: int):
             return image
 
     except asyncio.TimeoutError:
-        logger.error("Frame %s timed out", index + 1)
+        logger.error(
+            "Frame %s timed out",
+            index + 1,
+        )
         return None
 
     except Exception as error:
-        logger.error("Frame %s error: %s", index + 1, error)
+        logger.error(
+            "Frame %s error: %s",
+            index + 1,
+            error,
+        )
         return None
 
 async def generate_gif(prompt_base: str):
@@ -412,7 +445,13 @@ async def generate_gif(prompt_base: str):
                 seed=seed,
             )
 
-            tasks.append(download_frame(session, url, index))
+            tasks.append(
+                download_frame(
+                    session,
+                    url,
+                    index,
+                )
+            )
 
         results = await asyncio.gather(
             *tasks,
@@ -423,14 +462,25 @@ async def generate_gif(prompt_base: str):
 
     for index, result in enumerate(results):
         if isinstance(result, Exception) or result is None:
-            logger.warning("Кадр %s пропущен", index + 1)
+            logger.warning(
+                "Кадр %s пропущен",
+                index + 1,
+            )
             continue
 
         frames.append(result)
-        logger.info("Кадр %s/%s готов", index + 1, len(variations))
+
+        logger.info(
+            "Кадр %s/%s готов",
+            index + 1,
+            len(variations),
+        )
 
     if len(frames) < 3:
-        logger.error("Недостаточно кадров для GIF: %s", len(frames))
+        logger.error(
+            "Недостаточно кадров для GIF: %s",
+            len(frames),
+        )
         return None
 
     buffer = BytesIO()
@@ -447,7 +497,10 @@ async def generate_gif(prompt_base: str):
 
     buffer.seek(0)
 
-    logger.info("GIF готов: %s кадров", len(frames))
+    logger.info(
+        "GIF готов: %s кадров",
+        len(frames),
+    )
 
     return buffer
 
@@ -464,7 +517,11 @@ def get_user_history(user_id: int) -> list:
     with history_lock:
         return list(user_history.get(user_id, []))
 
-def add_to_history(user_id: int, role: str, text: str):
+def add_to_history(
+    user_id: int,
+    role: str,
+    text: str,
+):
     with history_lock:
         if user_id not in user_history:
             user_history[user_id] = []
@@ -643,7 +700,7 @@ def get_time_until_photo_refill(user_id: int) -> str:
 async def handle_admin(message):
     user_id = message.from_user.id
 
-    text = (message.text or "")
+    text = message.text or ""
     text = text.replace("/admin", "", 1).strip()
 
     provided_hash = hashlib.sha256(
@@ -686,8 +743,14 @@ PLANS = {
     },
 }
 
-async def send_stars_invoice(user_id: int, plan: str = "plus"):
-    selected_plan = PLANS.get(plan, PLANS["plus"])
+async def send_stars_invoice(
+    user_id: int,
+    plan: str = "plus",
+):
+    selected_plan = PLANS.get(
+        plan,
+        PLANS["plus"],
+    )
 
     try:
         await bot.send_invoice(
@@ -707,7 +770,10 @@ async def send_stars_invoice(user_id: int, plan: str = "plus"):
         )
 
     except Exception as error:
-        logger.exception("Invoice error: %s", error)
+        logger.exception(
+            "Invoice error: %s",
+            error,
+        )
 
         await bot.send_message(
             user_id,
@@ -720,11 +786,17 @@ async def handle_start(message):
     start_parameter = (message.text or "").strip().lower()
 
     if "buy_plus" in start_parameter:
-        await send_stars_invoice(user_id, "plus")
+        await send_stars_invoice(
+            user_id,
+            "plus",
+        )
         return
 
     if "buy_vip" in start_parameter:
-        await send_stars_invoice(user_id, "vip")
+        await send_stars_invoice(
+            user_id,
+            "vip",
+        )
         return
 
     clear_history(user_id)
@@ -736,8 +808,12 @@ async def handle_start(message):
 
 @bot.message_handler(commands=["buy"])
 async def handle_buy(message):
-    command_text = (message.text or "")
-    command_text = command_text.replace("/buy", "", 1).strip().lower()
+    command_text = message.text or ""
+    command_text = command_text.replace(
+        "/buy",
+        "",
+        1,
+    ).strip().lower()
 
     plan = "vip" if "vip" in command_text else "plus"
 
@@ -754,7 +830,10 @@ async def handle_pre_checkout(query):
             ok=True,
         )
     except Exception as error:
-        logger.error("Pre-checkout error: %s", error)
+        logger.error(
+            "Pre-checkout error: %s",
+            error,
+        )
 
 @bot.message_handler(content_types=["successful_payment"])
 async def handle_successful_payment(message):
@@ -762,7 +841,10 @@ async def handle_successful_payment(message):
     payload = payment.invoice_payload
 
     if payload not in {"luna_plus", "luna_vip"}:
-        logger.error("Unknown payment payload: %s", payload)
+        logger.error(
+            "Unknown payment payload: %s",
+            payload,
+        )
 
         await bot.reply_to(
             message,
@@ -822,7 +904,10 @@ async def send_generated_photo(
         return True
 
     except Exception as error:
-        logger.exception("Send photo error: %s", error)
+        logger.exception(
+            "Send photo error: %s",
+            error,
+        )
         return False
 
 @bot.message_handler(commands=["photo"])
@@ -838,8 +923,12 @@ async def handle_photo(message):
         )
         return
 
-    text = (message.text or "")
-    text = text.replace("/photo", "", 1).strip()
+    text = message.text or ""
+    text = text.replace(
+        "/photo",
+        "",
+        1,
+    ).strip()
 
     if not text:
         text = "sensual nude"
@@ -865,7 +954,7 @@ async def handle_photo(message):
         )
 
 # ============================================================
-# 17. GIF
+# 17. GIF / ВИДЕО
 # ============================================================
 
 @bot.message_handler(
@@ -873,7 +962,12 @@ async def handle_photo(message):
         message.text
         and any(
             word in message.text.lower()
-            for word in ["видео", "гиф", "gif", "анимац"]
+            for word in [
+                "видео",
+                "гиф",
+                "gif",
+                "анимац",
+            ]
         )
     )
 )
@@ -926,7 +1020,10 @@ async def handle_gif(message):
         )
 
     except Exception as error:
-        logger.exception("Send GIF error: %s", error)
+        logger.exception(
+            "Send GIF error: %s",
+            error,
+        )
 
         await bot.reply_to(
             message,
@@ -947,7 +1044,12 @@ async def handle_gif(message):
         )
         and not any(
             word in message.text.lower()
-            for word in ["видео", "гиф", "gif", "анимац"]
+            for word in [
+                "видео",
+                "гиф",
+                "gif",
+                "анимац",
+            ]
         )
     )
 )
@@ -1047,7 +1149,10 @@ async def handle_message(message):
     with user_message_lock:
         last_time = user_last_message.get(user_id)
 
-        if last_time is not None and current_time - last_time < 0.5:
+        if (
+            last_time is not None
+            and current_time - last_time < 0.5
+        ):
             return
 
         user_last_message[user_id] = current_time
@@ -1067,7 +1172,10 @@ async def handle_message(message):
         "анимац",
     ]
 
-    if any(word in lowered_text for word in media_words):
+    if any(
+        word in lowered_text
+        for word in media_words
+    ):
         return
 
     if not use_message(user_id):
@@ -1135,7 +1243,10 @@ async def handle_message(message):
             )
 
     except Exception as error:
-        logger.exception("Main handler error: %s", error)
+        logger.exception(
+            "Main handler error: %s",
+            error,
+        )
 
         await bot.reply_to(
             message,
